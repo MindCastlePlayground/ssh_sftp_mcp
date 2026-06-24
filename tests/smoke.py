@@ -320,6 +320,12 @@ class SmokeTest(unittest.TestCase):
                 return True
 
         class WriteChannel:
+            def __init__(self):
+                self.timeout = "unset"
+
+            def settimeout(self, timeout):
+                self.timeout = timeout
+
             def shutdown_write(self):
                 return None
 
@@ -332,6 +338,12 @@ class SmokeTest(unittest.TestCase):
                 self.writes.append(len(data))
 
         class ExitChannel:
+            def __init__(self):
+                self.timeout = "unset"
+
+            def settimeout(self, timeout):
+                self.timeout = timeout
+
             def recv_exit_status(self):
                 return 0
 
@@ -353,7 +365,8 @@ class SmokeTest(unittest.TestCase):
             def get_transport(self):
                 return Transport()
 
-            def exec_command(self, command):
+            def exec_command(self, command, timeout=None):
+                self.timeout = timeout
                 return self.stdin, Stdout(), Stderr()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -366,6 +379,8 @@ class SmokeTest(unittest.TestCase):
             size = session.shell_upload(str(path), "/tmp/large.bin")
         self.assertEqual(size, Limits.file_chunk + 3)
         self.assertEqual(client.stdin.writes, [Limits.file_chunk, 3])
+        self.assertIsNone(client.timeout)
+        self.assertIsNone(client.stdin.channel.timeout)
 
     def test_sftp_download_uses_bounded_prefetch(self):
         class Sftp:
@@ -400,11 +415,18 @@ class SmokeTest(unittest.TestCase):
         class Stdin:
             def __init__(self):
                 self.closed = False
+                self.channel = ExitChannel()
 
             def close(self):
                 self.closed = True
 
         class ExitChannel:
+            def __init__(self):
+                self.timeout = "unset"
+
+            def settimeout(self, timeout):
+                self.timeout = timeout
+
             def recv_exit_status(self):
                 return 0
 
@@ -432,7 +454,8 @@ class SmokeTest(unittest.TestCase):
             def get_transport(self):
                 return Transport()
 
-            def exec_command(self, command):
+            def exec_command(self, command, timeout=None):
+                self.timeout = timeout
                 return self.stdin, self.stdout, Stderr()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -446,6 +469,9 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(size, Limits.file_chunk + 3)
         self.assertEqual(saved_size, Limits.file_chunk + 3)
         self.assertEqual(client.stdout.reads, [Limits.file_chunk, Limits.file_chunk, Limits.file_chunk])
+        self.assertIsNone(client.timeout)
+        self.assertIsNone(client.stdin.channel.timeout)
+        self.assertIsNone(client.stdout.channel.timeout)
 
     def test_transfer_skips_shell_fallback_when_sftp_disconnects(self):
         class Log:

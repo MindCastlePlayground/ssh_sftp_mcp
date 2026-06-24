@@ -310,7 +310,14 @@ class SshSession:
     def sftp(self) -> paramiko.SFTPClient:
         if not self.probe() or not self.client:
             raise RuntimeError(Msg.disconnected)
-        return self.client.open_sftp()
+        sftp = self.client.open_sftp()
+        self.no_timeout(sftp.get_channel())
+        return sftp
+
+    def no_timeout(self, *items) -> None:
+        for item in items:
+            if hasattr(item, "settimeout"):
+                item.settimeout(Limits.transfer_timeout)
 
     def sftp_download(self, sftp: paramiko.SFTPClient, remote_path: str, local_path: str) -> int:
         path = Path(local_path)
@@ -327,7 +334,8 @@ class SshSession:
         if not self.probe() or not self.client:
             raise RuntimeError(Msg.disconnected)
         self.log.info("ssh shell transfer command session=%s ip=%s command=%s", self.id, self.info.ip, command)
-        stdin, stdout, stderr = self.client.exec_command(command)
+        stdin, stdout, stderr = self.client.exec_command(command, timeout=Limits.transfer_timeout)
+        self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
         if data is not None:
             stdin.write(data)
             stdin.channel.shutdown_write()
@@ -342,7 +350,8 @@ class SshSession:
         if not self.probe() or not self.client:
             raise RuntimeError(Msg.disconnected)
         self.log.info("ssh shell transfer file session=%s ip=%s command=%s local=%s", self.id, self.info.ip, command, local_path)
-        stdin, stdout, stderr = self.client.exec_command(command)
+        stdin, stdout, stderr = self.client.exec_command(command, timeout=Limits.transfer_timeout)
+        self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
         size = 0
         with Path(local_path).open("rb") as file:
             while True:
@@ -374,7 +383,8 @@ class SshSession:
         if not self.probe() or not self.client:
             raise RuntimeError(Msg.disconnected)
         self.log.info("ssh shell download stream session=%s ip=%s command=%s local=%s", self.id, self.info.ip, command, local_path)
-        stdin, stdout, stderr = self.client.exec_command(command)
+        stdin, stdout, stderr = self.client.exec_command(command, timeout=Limits.transfer_timeout)
+        self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
         stdin.close()
         size = 0
         with path.open("wb") as file:
