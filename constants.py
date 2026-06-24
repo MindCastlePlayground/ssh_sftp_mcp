@@ -13,6 +13,29 @@ class Store:
     log = "ssh_sftp_mcp.log"
 
 
+class ServiceKey:
+    prefix = "_mcp_service_"
+    dash = "-"
+    underline = "_"
+
+
+class ServiceFile:
+    tool = "tool_service.py"
+
+
+class ServiceName:
+    tool = "tool"
+
+
+class ServiceEntry:
+    tool = "ToolApi"
+
+
+class ServiceError:
+    module_spec = "cannot create service module spec"
+    loader = "service module has no loader"
+
+
 class Env:
     home = "SSH_SFTP_MCP_HOME"
 
@@ -132,6 +155,12 @@ class Field:
     old_ip = "old_ip"
     fallback = "fallback"
     method = "method"
+    service = "service"
+    version = "version"
+    loaded_version = "loaded_version"
+    mtime = "mtime"
+    mtime_ns = "mtime_ns"
+    size = "size"
 
 
 class Tool:
@@ -148,6 +177,7 @@ class Tool:
     upload = "sftp_upload"
     download = "sftp_download"
     servers = "ssh_list_servers"
+    version = "service_version"
 
 
 class ToolDesc:
@@ -164,6 +194,7 @@ class ToolDesc:
     upload = "Upload a local file to a server with SFTP."
     download = "Download a remote file from a server with SFTP."
     servers = "List registered SSH servers without passwords."
+    version = "Return the current hot-reload service version timestamp."
 
 
 class Msg:

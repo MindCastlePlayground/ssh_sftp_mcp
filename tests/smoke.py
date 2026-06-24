@@ -6,9 +6,10 @@ import time
 import unittest
 from pathlib import Path
 
-from ssh_sftp_mcp.constants import CommandStatus, ExecMode, Field, JsonKey, Limits, Msg, Origin, RpcError, RpcMethod, RpcValue, SessionStatus, Text, Tool, TransferMethod
+from ssh_sftp_mcp.constants import CommandStatus, ExecMode, Field, JsonKey, Limits, Msg, Origin, RpcError, RpcMethod, RpcValue, ServiceFile, ServiceName, SessionStatus, Text, Tool, TransferMethod
 from ssh_sftp_mcp.models import CommandInfo, ServerInfo
 from ssh_sftp_mcp.rpc import McpServer, StdioApp, StdioClosed
+from ssh_sftp_mcp.service_host import ServiceHost, ServiceSpec
 from ssh_sftp_mcp.session import SessionManager, SshSession
 from ssh_sftp_mcp.store import ServerStore
 from ssh_sftp_mcp.tools import ToolCatalog, ToolService
@@ -28,6 +29,7 @@ class SmokeTest(unittest.TestCase):
         self.assertIn(Tool.read, names)
         self.assertIn(Tool.upload, names)
         self.assertIn(Tool.download, names)
+        self.assertIn(Tool.version, names)
 
     def test_register_duplicate_ip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -110,6 +112,43 @@ class SmokeTest(unittest.TestCase):
             self.assertFalse(res[JsonKey.is_error])
             data = json.loads(res[JsonKey.content][0][JsonKey.text])
             self.assertEqual(data[Field.ip], "127.0.0.1")
+
+    def test_service_host_reloads_changed_file_same_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "svc.py"
+            path.write_text("class Api:\n    def value(self):\n        return 'v1'\n", encoding=Text.encoding)
+            host = ServiceHost(ServiceSpec("tmp", path, "Api"))
+            self.assertEqual(host.api().value(), "v1")
+            time.sleep(0.01)
+            path.write_text("class Api:\n    def value(self):\n        return 'v2'\n", encoding=Text.encoding)
+            self.assertEqual(host.api().value(), "v2")
+
+    def test_service_version_tool_reports_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = ToolService(SessionManager(ServerStore(Path(tmp))))
+            res = service.call(Tool.version, {})
+            self.assertFalse(res[JsonKey.is_error])
+            data = res[JsonKey.structured]
+            self.assertEqual(data[Field.service], ServiceName.tool)
+            self.assertTrue(data[Field.path].endswith(ServiceFile.tool))
+            self.assertIn(str(data[Field.mtime_ns]), data[Field.version])
+            self.assertGreater(data[Field.size], 0)
+            self.assertIsNone(data[Field.loaded_version])
+
+    def test_service_version_tracks_loaded_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "svc.py"
+            path.write_text("class Api:\n    def value(self):\n        return 'v1'\n", encoding=Text.encoding)
+            host = ServiceHost(ServiceSpec("tmp", path, "Api"))
+            first = host.info()
+            self.assertIsNone(first[Field.loaded_version])
+            host.api().value()
+            second = host.info()
+            self.assertEqual(second[Field.loaded_version], second[Field.version])
+            time.sleep(0.01)
+            path.write_text("class Api:\n    def value(self):\n        return 'v2'\n", encoding=Text.encoding)
+            third = host.info()
+            self.assertNotEqual(third[Field.loaded_version], third[Field.version])
 
     def test_json_rpc_recovers_from_handler_exception(self):
         class BadServer:

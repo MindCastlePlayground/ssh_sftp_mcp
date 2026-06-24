@@ -1,7 +1,9 @@
 import json
+from pathlib import Path
 
-from .constants import Default, ExecMode, Field, JsonKey, Msg, RpcValue, Tool, ToolDesc
+from .constants import Default, ExecMode, Field, JsonKey, ServiceEntry, ServiceFile, ServiceName, RpcValue, Tool, ToolDesc
 from .log import LogFactory
+from .service_host import ServiceHost, ServiceSpec
 from .session import SessionManager
 from .store import ServerStore
 
@@ -109,12 +111,18 @@ class ToolCatalog:
                 Field.session_id: text(),
             }, [Field.ip, Field.remote_path, Field.local_path])),
             cls.item(Tool.servers, ToolDesc.servers, Schemas.obj({}, [])),
+            cls.item(Tool.version, ToolDesc.version, Schemas.obj({}, [])),
         ]
 
 
-class ToolService:
+class ToolFacade:
     def __init__(self, manager: SessionManager):
         self.manager = manager
+        self.host = ServiceHost(ServiceSpec(
+            ServiceName.tool,
+            Path(__file__).resolve().with_name(ServiceFile.tool),
+            ServiceEntry.tool,
+        ))
         self.log = LogFactory.get()
 
     def call(self, name: str, args: dict) -> dict:
@@ -128,67 +136,9 @@ class ToolService:
             return self.result({Field.reason: str(exc)}, True)
 
     def route(self, name: str, args: dict) -> dict | list:
-        if name == Tool.register:
-            return self.manager.reg(
-                str(args[Field.ip]),
-                int(args[Field.port]),
-                str(args[Field.username]),
-                str(args[Field.password]),
-            )
-        if name == Tool.update:
-            return self.manager.upd(
-                str(args[Field.old_ip]),
-                str(args[Field.ip]),
-                int(args[Field.port]),
-                str(args[Field.username]),
-                str(args[Field.password]),
-            )
-        if name == Tool.delete:
-            return self.manager.delete(str(args[Field.ip]))
-        if name == Tool.connect:
-            return self.manager.conn(str(args[Field.ip]))
-        if name == Tool.temp:
-            return self.manager.temp(
-                str(args[Field.ip]),
-                int(args[Field.port]),
-                str(args[Field.username]),
-                str(args[Field.password]),
-            )
-        if name == Tool.sessions:
-            return {Field.sessions: self.manager.list(str(args[Field.ip]))}
-        if name == Tool.close:
-            return {Field.sessions: self.manager.close(str(args[Field.ip]), args.get(Field.session_id))}
-        if name == Tool.exec:
-            mode = ExecMode(str(args.get(Field.mode, ExecMode.host.value)))
-            return self.manager.exec(str(args[Field.session_id]), str(args[Field.command]), mode, args)
-        if name == Tool.read:
-            return self.manager.read(
-                str(args[Field.session_id]),
-                args.get(Field.command_id),
-                int(args.get(Field.cursor, 0)),
-                int(args.get(Field.limit, Default.read)),
-            )
-        if name == Tool.status:
-            return self.manager.status(str(args[Field.session_id]), args.get(Field.command_id))
-        if name == Tool.upload:
-            return self.manager.transfer(
-                str(args[Field.ip]),
-                str(args[Field.local_path]),
-                str(args[Field.remote_path]),
-                True,
-                args.get(Field.session_id),
-            )
-        if name == Tool.download:
-            return self.manager.transfer(
-                str(args[Field.ip]),
-                str(args[Field.local_path]),
-                str(args[Field.remote_path]),
-                False,
-                args.get(Field.session_id),
-            )
-        if name == Tool.servers:
-            return {Field.servers: self.manager.store.list()}
-        raise KeyError(Msg.tool_not_found)
+        if name == Tool.version:
+            return self.host.info()
+        return self.host.api(self.manager).route(name, args)
 
     def result(self, data: dict | list, is_error: bool) -> dict:
         text = json.dumps(data, ensure_ascii=False, indent=2)
@@ -199,7 +149,11 @@ class ToolService:
         }
 
 
+class ToolService(ToolFacade):
+    pass
+
+
 class ToolFactory:
     @staticmethod
-    def make() -> ToolService:
-        return ToolService(SessionManager(ServerStore()))
+    def make() -> ToolFacade:
+        return ToolFacade(SessionManager(ServerStore()))
