@@ -55,53 +55,47 @@ claude mcp add ssh-sftp-mcp -- python -m ssh_sftp_mcp
 
 ### OpenCode
 
-OpenCode 支持两种 MCP 配置方式。
+OpenCode 官方配置文件是 `opencode.json` / `opencode.jsonc`。MCP 服务器应配置在顶层 `mcp` 字段下。
 
-#### 方式一：项目级 `mcp.json`（推荐）
+#### 方式一：项目级 `opencode.json`（推荐）
 
-在项目根目录创建或编辑 `mcp.json`：
+在项目根目录创建或编辑 `opencode.json`：
 
 ```json
 {
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "ssh-sftp-mcp": {
-      "command": "python",
-      "args": ["-m", "ssh_sftp_mcp"],
-      "cwd": "H:\\Documents\\AgentAbility"
+      "type": "local",
+      "command": ["python", "-m", "ssh_sftp_mcp"],
+      "cwd": "H:\\Documents\\AgentAbility",
+      "enabled": true
     }
   }
 }
 ```
 
-也可在项目根目录执行以下命令一键添加：
-
-```bash
-opencode mcp add ssh-sftp-mcp -- python -m ssh_sftp_mcp
-```
+`cwd` 必须指向包含 `ssh_sftp_mcp` 包目录的父目录。当前本地路径下应使用 `H:\Documents\AgentAbility`。
 
 #### 方式二：全局用户配置
 
-编辑 `~/.config/opencode/mcp.json`（Linux/macOS）或 `%APPDATA%\opencode\mcp.json`（Windows）：
+编辑 `~/.config/opencode/opencode.json`：
 
 ```json
 {
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "ssh-sftp-mcp": {
-      "command": "python",
-      "args": ["-m", "ssh_sftp_mcp"],
-      "cwd": "H:\\Documents\\AgentAbility"
+      "type": "local",
+      "command": ["python", "-m", "ssh_sftp_mcp"],
+      "cwd": "H:\\Documents\\AgentAbility",
+      "enabled": true
     }
   }
 }
 ```
 
-#### 方式三：OpenCode 设置面板
-
-在 OpenCode 的 Settings → MCP Servers 中点击 "Add Server"，填写：
-
-- **Name**: `ssh-sftp-mcp`
-- **Command**: `python`
-- **Args**: `-m ssh_sftp_mcp`
+在 Windows PowerShell 中，`~` 通常对应 `$env:USERPROFILE`，即 `$env:USERPROFILE\.config\opencode\opencode.json`。
 
 ### 其他 MCP 客户端
 
@@ -134,7 +128,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 - 检查 Python 环境
 - 安装 paramiko 依赖
 - 创建状态存储目录
-- 生成 `.mcp.json`（Claude Code）和 `mcp.json`（OpenCode）配置文件
+- 生成 `.mcp.json`（Claude Code）和 `opencode.json`（OpenCode）配置文件
 
 ### Linux / macOS (Bash)
 
@@ -154,7 +148,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-repo>/main/setup.sh)
 - 创建虚拟环境（可选）并安装 paramiko
 - 创建状态存储目录
 - 生成 MCP 配置文件
-- 同时写入 Claude Code（`.mcp.json`）和 OpenCode（`mcp.json`）配置
+- 同时写入 Claude Code（`.mcp.json`）和 OpenCode（`opencode.json`）配置
 
 ## 工具列表
 

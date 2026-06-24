@@ -79,15 +79,17 @@ cat > "$CLAUDE_CONFIG" << EOF
 EOF
 echo -e "  ${GREEN}[OK] Claude Code 配置: $CLAUDE_CONFIG${NC}"
 
-# 5b. OpenCode 配置 (mcp.json)
-OPENCODE_CONFIG="$PROJECT_ROOT/mcp.json"
+# 5b. OpenCode 配置 (opencode.json)
+OPENCODE_CONFIG="$PROJECT_ROOT/opencode.json"
 cat > "$OPENCODE_CONFIG" << EOF
 {
-  "mcpServers": {
+  "\$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "ssh-sftp-mcp": {
-      "command": "$PYTHON",
-      "args": ["-m", "ssh_sftp_mcp"],
-      "cwd": "$MCP_CWD"
+      "type": "local",
+      "command": ["$PYTHON", "-m", "ssh_sftp_mcp"],
+      "cwd": "$MCP_CWD",
+      "enabled": true
     }
   }
 }
@@ -101,7 +103,7 @@ echo -e "${GREEN}  安装完成！${NC}"
 echo -e "${CYAN}============================================${NC}"
 echo ""
 echo "Claude Code:  项目根目录已生成 .mcp.json，重启 Claude Code 即可使用。"
-echo "OpenCode:     项目根目录已生成 mcp.json，重启 OpenCode 即可使用。"
+echo "OpenCode:     项目根目录已生成 opencode.json，重启 OpenCode 即可使用。"
 echo ""
 echo "手动测试:     cd $MCP_CWD && $PYTHON -m ssh_sftp_mcp"
 echo "配置目录:     $PROJECT_ROOT"

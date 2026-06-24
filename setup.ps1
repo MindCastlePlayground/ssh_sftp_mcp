@@ -70,18 +70,20 @@ $claudeConfigPath = Join-Path $projectRoot ".mcp.json"
 $claudeConfig | ConvertTo-Json -Depth 4 | Set-Content -Path $claudeConfigPath -Encoding UTF8
 Write-Host "  [OK] Claude Code 配置: $claudeConfigPath" -ForegroundColor Green
 
-# 5b. OpenCode 配置 (mcp.json)
+# 5b. OpenCode 配置 (opencode.json)
 $opencodeConfig = @{
-    mcpServers = @{
+    '$schema' = "https://opencode.ai/config.json"
+    mcp = @{
         "ssh-sftp-mcp" = @{
-            command = $python
-            args    = @("-m", "ssh_sftp_mcp")
+            type    = "local"
+            command = @($python, "-m", "ssh_sftp_mcp")
             cwd     = $mcpCwd
+            enabled = $true
         }
     }
 }
 
-$opencodeConfigPath = Join-Path $projectRoot "mcp.json"
+$opencodeConfigPath = Join-Path $projectRoot "opencode.json"
 $opencodeConfig | ConvertTo-Json -Depth 4 | Set-Content -Path $opencodeConfigPath -Encoding UTF8
 Write-Host "  [OK] OpenCode 配置:    $opencodeConfigPath" -ForegroundColor Green
 
@@ -92,7 +94,7 @@ Write-Host "  安装完成！" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Claude Code:  项目根目录已生成 .mcp.json，重启 Claude Code 即可使用。"
-Write-Host "OpenCode:     项目根目录已生成 mcp.json，重启 OpenCode 即可使用。"
+Write-Host "OpenCode:     项目根目录已生成 opencode.json，重启 OpenCode 即可使用。"
 Write-Host ""
 Write-Host "手动测试:     cd $mcpCwd; $python -m ssh_sftp_mcp"
 Write-Host "配置文件:     $claudeConfigPath"
