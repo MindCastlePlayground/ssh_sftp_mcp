@@ -367,6 +367,86 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(size, Limits.file_chunk + 3)
         self.assertEqual(client.stdin.writes, [Limits.file_chunk, 3])
 
+    def test_sftp_download_uses_bounded_prefetch(self):
+        class Sftp:
+            def __init__(self):
+                self.prefetch = None
+                self.max_prefetch = None
+
+            def get(self, remote_path, local_path, prefetch=True, max_concurrent_prefetch_requests=None):
+                self.remote_path = remote_path
+                self.local_path = local_path
+                self.prefetch = prefetch
+                self.max_prefetch = max_concurrent_prefetch_requests
+                Path(local_path).write_bytes(b"ok")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "large.bin"
+            sftp = Sftp()
+            session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+            size = session.sftp_download(sftp, "/tmp/large.bin", str(path))
+            saved_size = path.stat().st_size
+        self.assertEqual(size, 2)
+        self.assertEqual(saved_size, 2)
+        self.assertEqual(sftp.remote_path, "/tmp/large.bin")
+        self.assertTrue(sftp.prefetch)
+        self.assertEqual(sftp.max_prefetch, Limits.sftp_prefetch)
+
+    def test_shell_download_streams_file_chunks(self):
+        class Transport:
+            def is_active(self):
+                return True
+
+        class Stdin:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class ExitChannel:
+            def recv_exit_status(self):
+                return 0
+
+        class Stdout:
+            def __init__(self, chunks):
+                self.chunks = chunks
+                self.reads = []
+                self.channel = ExitChannel()
+
+            def read(self, size=-1):
+                self.reads.append(size)
+                if self.chunks:
+                    return self.chunks.pop(0)
+                return b""
+
+        class Stderr:
+            def read(self):
+                return b""
+
+        class Client:
+            def __init__(self):
+                self.stdin = Stdin()
+                self.stdout = Stdout([b"x" * Limits.file_chunk, b"y" * 3])
+
+            def get_transport(self):
+                return Transport()
+
+            def exec_command(self, command):
+                return self.stdin, self.stdout, Stderr()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "large.bin"
+            client = Client()
+            session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+            session.status = SessionStatus.connected
+            session.client = client
+            size = session.shell_download("/tmp/large.bin", str(path))
+            saved_size = path.stat().st_size
+        self.assertEqual(size, Limits.file_chunk + 3)
+        self.assertEqual(saved_size, Limits.file_chunk + 3)
+        self.assertEqual(client.stdout.reads, [Limits.file_chunk, Limits.file_chunk, Limits.file_chunk])
+
     def test_transfer_skips_shell_fallback_when_sftp_disconnects(self):
         class Log:
             def info(self, *args):

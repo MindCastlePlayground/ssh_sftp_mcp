@@ -286,3 +286,4 @@ class Limits:
     connect_timeout = 15
     keepalive = 30
     prep_wait = 0.2
+    sftp_prefetch = 64

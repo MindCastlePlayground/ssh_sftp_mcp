@@ -312,6 +312,17 @@ class SshSession:
             raise RuntimeError(Msg.disconnected)
         return self.client.open_sftp()
 
+    def sftp_download(self, sftp: paramiko.SFTPClient, remote_path: str, local_path: str) -> int:
+        path = Path(local_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sftp.get(
+            remote_path,
+            str(path),
+            prefetch=True,
+            max_concurrent_prefetch_requests=Limits.sftp_prefetch,
+        )
+        return path.stat().st_size
+
     def run(self, command: str, data: bytes | None = None) -> bytes:
         if not self.probe() or not self.client:
             raise RuntimeError(Msg.disconnected)
@@ -357,11 +368,27 @@ class SshSession:
         return self.run_file(ShellCmd.and_op.join(parts), local_path)
 
     def shell_download(self, remote_path: str, local_path: str) -> int:
-        data = self.run(f"{ShellCmd.cat} {shlex.quote(remote_path)}")
         path = Path(local_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-        return len(data)
+        command = f"{ShellCmd.cat} {shlex.quote(remote_path)}"
+        if not self.probe() or not self.client:
+            raise RuntimeError(Msg.disconnected)
+        self.log.info("ssh shell download stream session=%s ip=%s command=%s local=%s", self.id, self.info.ip, command, local_path)
+        stdin, stdout, stderr = self.client.exec_command(command)
+        stdin.close()
+        size = 0
+        with path.open("wb") as file:
+            while True:
+                chunk = stdout.read(Limits.file_chunk)
+                if not chunk:
+                    break
+                file.write(chunk)
+                size += len(chunk)
+        err = stderr.read().decode(Text.encoding, errors="replace")
+        code = stdout.channel.recv_exit_status()
+        if code:
+            raise RuntimeError(err.strip() or f"{Msg.remote_failed}: {code}")
+        return size
 
 
 class SessionManager:
@@ -461,8 +488,7 @@ class SessionManager:
                     sftp.put(local_path, remote_path)
                     size = Path(local_path).stat().st_size
                 else:
-                    sftp.get(remote_path, local_path)
-                    size = Path(local_path).stat().st_size
+                    size = session.sftp_download(sftp, remote_path, local_path)
             session.log.info("sftp transfer ok session=%s ip=%s bytes=%s", session.id, session.info.ip, size)
         except Exception as exc:
             session.log.exception("sftp transfer failed; trying shell fallback session=%s ip=%s", session.id, session.info.ip)
