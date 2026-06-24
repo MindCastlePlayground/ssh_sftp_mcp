@@ -1,11 +1,17 @@
 from .rpc import StdioApp
+from .constants import Msg
+from .log import LogFactory
 
 
 class Main:
     @staticmethod
     def run() -> None:
-        StdioApp().run()
+        LogFactory.setup()
+        try:
+            StdioApp().run()
+        except BaseException:
+            LogFactory.get().exception(Msg.server_failed)
+            raise
 
 
 Main.run()
-

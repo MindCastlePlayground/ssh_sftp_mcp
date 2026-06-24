@@ -182,6 +182,10 @@ class Msg:
     deleted = "deleted"
     updated = "updated"
     remote_failed = "remote command failed"
+    local_missing = "local source file not found"
+    stdio_eof = "stdio input closed"
+    stdio_closed = "stdio output closed"
+    server_failed = "mcp server stopped unexpectedly"
 
 
 class TransferMethod:
@@ -246,6 +250,7 @@ class Limits:
     tail = 8192
     read = Default.read
     recv = 32768
+    file_chunk = 1048576
     poll = 0.05
     connect_timeout = 15
     keepalive = 30

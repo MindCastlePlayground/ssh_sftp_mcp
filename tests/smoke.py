@@ -1,12 +1,14 @@
 import json
+import os
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from ssh_sftp_mcp.constants import CommandStatus, ExecMode, Field, JsonKey, Origin, RpcError, RpcMethod, RpcValue, Text, Tool, TransferMethod
+from ssh_sftp_mcp.constants import CommandStatus, ExecMode, Field, JsonKey, Limits, Msg, Origin, RpcError, RpcMethod, RpcValue, SessionStatus, Text, Tool, TransferMethod
 from ssh_sftp_mcp.models import CommandInfo, ServerInfo
-from ssh_sftp_mcp.rpc import McpServer, StdioApp
+from ssh_sftp_mcp.rpc import McpServer, StdioApp, StdioClosed
 from ssh_sftp_mcp.session import SessionManager, SshSession
 from ssh_sftp_mcp.store import ServerStore
 from ssh_sftp_mcp.tools import ToolCatalog, ToolService
@@ -172,6 +174,9 @@ class SmokeTest(unittest.TestCase):
             def sftp(self):
                 raise PermissionError("denied")
 
+            def probe(self):
+                return True
+
             def shell_upload(self, local_path, remote_path):
                 return Path(local_path).stat().st_size
 
@@ -182,3 +187,187 @@ class SmokeTest(unittest.TestCase):
             data = manager.transfer_session(Session(), str(local), "/tmp/a.txt", True)
             self.assertEqual(data[Field.method], TransferMethod.shell)
             self.assertEqual(data[Field.bytes], 2)
+
+    def test_upload_resolves_relative_source_from_package_dir(self):
+        class Log:
+            def info(self, *args):
+                return None
+
+            def exception(self, *args):
+                return None
+
+        class Sftp:
+            def __init__(self, session):
+                self.session = session
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def put(self, local_path, remote_path):
+                self.session.local_path = local_path
+
+        class Session:
+            id = "sid"
+            info = ServerInfo("127.0.0.1", 22, "u", "p")
+            log = Log()
+            local_path = ""
+
+            def sftp(self):
+                return Sftp(self)
+
+            def probe(self):
+                return True
+
+        old = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                session = Session()
+                manager = SessionManager(ServerStore(Path(tmp) / "state"))
+                data = manager.transfer_session(session, "README.md", "/tmp/README.md", True)
+            finally:
+                os.chdir(old)
+        expected = Path(__file__).resolve().parents[1] / "README.md"
+        self.assertEqual(Path(session.local_path), expected)
+        self.assertEqual(Path(data[Field.local_path]), expected)
+
+    def test_upload_missing_source_fails_before_sftp(self):
+        class Log:
+            def info(self, *args):
+                return None
+
+            def exception(self, *args):
+                return None
+
+        class Session:
+            id = "sid"
+            info = ServerInfo("127.0.0.1", 22, "u", "p")
+            log = Log()
+
+            def sftp(self):
+                raise AssertionError("sftp should not open for missing local file")
+
+            def probe(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = SessionManager(ServerStore(Path(tmp) / "state"))
+            with self.assertRaisesRegex(FileNotFoundError, Msg.local_missing):
+                manager.transfer_session(Session(), "missing.txt", "/tmp/missing.txt", True)
+
+    def test_stdio_write_closed_raises_marker_exception(self):
+        class ClosedStdout:
+            def write(self, text):
+                raise BrokenPipeError("pipe closed")
+
+            def flush(self):
+                return None
+
+        old = sys.stdout
+        try:
+            sys.stdout = ClosedStdout()
+            app = StdioApp(object())
+            with self.assertRaises(StdioClosed):
+                app.write({JsonKey.jsonrpc: RpcValue.version, JsonKey.id: 1, JsonKey.result: {}})
+        finally:
+            sys.stdout = old
+
+    def test_shell_upload_streams_file_chunks(self):
+        class Transport:
+            def is_active(self):
+                return True
+
+        class WriteChannel:
+            def shutdown_write(self):
+                return None
+
+        class Stdin:
+            def __init__(self):
+                self.channel = WriteChannel()
+                self.writes = []
+
+            def write(self, data):
+                self.writes.append(len(data))
+
+        class ExitChannel:
+            def recv_exit_status(self):
+                return 0
+
+        class Stdout:
+            def __init__(self):
+                self.channel = ExitChannel()
+
+            def read(self):
+                return b""
+
+        class Stderr:
+            def read(self):
+                return b""
+
+        class Client:
+            def __init__(self):
+                self.stdin = Stdin()
+
+            def get_transport(self):
+                return Transport()
+
+            def exec_command(self, command):
+                return self.stdin, Stdout(), Stderr()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "large.bin"
+            path.write_bytes(b"x" * (Limits.file_chunk + 3))
+            client = Client()
+            session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+            session.status = SessionStatus.connected
+            session.client = client
+            size = session.shell_upload(str(path), "/tmp/large.bin")
+        self.assertEqual(size, Limits.file_chunk + 3)
+        self.assertEqual(client.stdin.writes, [Limits.file_chunk, 3])
+
+    def test_transfer_skips_shell_fallback_when_sftp_disconnects(self):
+        class Log:
+            def info(self, *args):
+                return None
+
+            def exception(self, *args):
+                return None
+
+            def warning(self, *args):
+                return None
+
+        class Session:
+            id = "sid"
+            info = ServerInfo("127.0.0.1", 22, "u", "p")
+            log = Log()
+            status = SessionStatus.connected
+            reason = ""
+            fallback = False
+
+            def sftp(self):
+                raise RuntimeError(Msg.disconnected)
+
+            def probe(self):
+                self.mark(SessionStatus.disconnected, Msg.disconnected)
+                return False
+
+            def mark(self, status, reason):
+                self.status = status
+                self.reason = reason
+
+            def shell_upload(self, local_path, remote_path):
+                self.fallback = True
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "a.txt"
+            local.write_text("ok", encoding=Text.encoding)
+            session = Session()
+            manager = SessionManager(ServerStore(Path(tmp) / "state"))
+            with self.assertRaisesRegex(RuntimeError, Msg.disconnected):
+                manager.transfer_session(session, str(local), "/tmp/a.txt", True)
+        self.assertFalse(session.fallback)
+        self.assertEqual(session.status, SessionStatus.disconnected)

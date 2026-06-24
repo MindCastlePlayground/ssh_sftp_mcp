@@ -15,6 +15,44 @@ from .log import LogFactory
 from .models import CommandInfo, OutputChunk, ServerInfo, SessionView
 
 
+class LocalPath:
+    @classmethod
+    def roots(cls) -> list[Path]:
+        package = Path(__file__).resolve().parent
+        paths = [Path.cwd().resolve(), package, package.parent]
+        roots = []
+        for path in paths:
+            if path not in roots:
+                roots.append(path)
+        return roots
+
+    @classmethod
+    def src(cls, local_path: str) -> str:
+        path = Path(local_path).expanduser()
+        if path.is_absolute():
+            found = path
+        else:
+            found = cls.find(path)
+        if not found.is_file():
+            raise FileNotFoundError(f"{Msg.local_missing}: {found}")
+        return str(found)
+
+    @classmethod
+    def dst(cls, local_path: str) -> str:
+        path = Path(local_path).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return str(path.resolve())
+
+    @classmethod
+    def find(cls, path: Path) -> Path:
+        for root in cls.roots():
+            item = (root / path).resolve()
+            if item.exists():
+                return item
+        return (Path.cwd() / path).resolve()
+
+
 class SshSession:
     def __init__(self, info: ServerInfo, origin: Origin):
         self.id = uuid.uuid4().hex
@@ -289,15 +327,34 @@ class SshSession:
             raise RuntimeError(err.strip() or f"{Msg.remote_failed}: {code}")
         return out
 
+    def run_file(self, command: str, local_path: str) -> int:
+        if not self.probe() or not self.client:
+            raise RuntimeError(Msg.disconnected)
+        self.log.info("ssh shell transfer file session=%s ip=%s command=%s local=%s", self.id, self.info.ip, command, local_path)
+        stdin, stdout, stderr = self.client.exec_command(command)
+        size = 0
+        with Path(local_path).open("rb") as file:
+            while True:
+                chunk = file.read(Limits.file_chunk)
+                if not chunk:
+                    break
+                stdin.write(chunk)
+                size += len(chunk)
+        stdin.channel.shutdown_write()
+        err = stderr.read().decode(Text.encoding, errors="replace")
+        stdout.read()
+        code = stdout.channel.recv_exit_status()
+        if code:
+            raise RuntimeError(err.strip() or f"{Msg.remote_failed}: {code}")
+        return size
+
     def shell_upload(self, local_path: str, remote_path: str) -> int:
-        data = Path(local_path).read_bytes()
         parent = posixpath.dirname(remote_path)
         parts = []
         if parent:
             parts.append(f"{ShellCmd.mkdir} {shlex.quote(parent)}")
         parts.append(f"{ShellCmd.cat} > {shlex.quote(remote_path)}")
-        self.run(ShellCmd.and_op.join(parts), data)
-        return len(data)
+        return self.run_file(ShellCmd.and_op.join(parts), local_path)
 
     def shell_download(self, remote_path: str, local_path: str) -> int:
         data = self.run(f"{ShellCmd.cat} {shlex.quote(remote_path)}")
@@ -392,6 +449,10 @@ class SessionManager:
             temp.close()
 
     def transfer_session(self, session: SshSession, local_path: str, remote_path: str, upload: bool) -> dict:
+        if upload:
+            local_path = LocalPath.src(local_path)
+        else:
+            local_path = LocalPath.dst(local_path)
         method = TransferMethod.sftp
         try:
             session.log.info("sftp transfer start session=%s ip=%s upload=%s local=%s remote=%s", session.id, session.info.ip, upload, local_path, remote_path)
@@ -405,11 +466,20 @@ class SessionManager:
             session.log.info("sftp transfer ok session=%s ip=%s bytes=%s", session.id, session.info.ip, size)
         except Exception as exc:
             session.log.exception("sftp transfer failed; trying shell fallback session=%s ip=%s", session.id, session.info.ip)
+            if not session.probe():
+                session.log.exception("sftp transfer disconnected; shell fallback skipped session=%s ip=%s", session.id, session.info.ip)
+                raise
             method = TransferMethod.shell
-            if upload:
-                size = session.shell_upload(local_path, remote_path)
-            else:
-                size = session.shell_download(remote_path, local_path)
+            try:
+                if upload:
+                    size = session.shell_upload(local_path, remote_path)
+                else:
+                    size = session.shell_download(remote_path, local_path)
+            except Exception:
+                session.log.exception("shell transfer fallback failed session=%s ip=%s", session.id, session.info.ip)
+                if not session.probe():
+                    session.mark(SessionStatus.disconnected, Msg.disconnected)
+                raise
             session.log.info("shell transfer fallback ok session=%s ip=%s bytes=%s original=%s", session.id, session.info.ip, size, exc)
         return {
             Field.ip: session.info.ip,

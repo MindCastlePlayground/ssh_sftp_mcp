@@ -6,6 +6,10 @@ from .log import LogFactory
 from .tools import ToolCatalog, ToolFactory, ToolService
 
 
+class StdioClosed(Exception):
+    pass
+
+
 class Response:
     @staticmethod
     def ok(req_id, result: dict) -> dict:
@@ -75,11 +79,15 @@ class StdioApp:
             try:
                 line = sys.stdin.readline()
                 if not line:
+                    self.log.info(Msg.stdio_eof)
                     break
                 line = line.strip().lstrip(Text.bom)
                 if not line:
                     continue
                 self.once(line)
+            except StdioClosed:
+                self.log.warning(Msg.stdio_closed)
+                break
             except Exception:
                 self.log.exception("stdio loop recovered from error")
 
@@ -91,10 +99,16 @@ class StdioApp:
                 self.write(res)
         except json.JSONDecodeError:
             self.write(Response.err(None, RpcError.parse, Msg.invalid_json))
+        except StdioClosed:
+            raise
         except Exception as exc:
             self.log.exception("stdio request failed")
             self.write(Response.err(None, RpcError.internal, str(exc)))
 
     def write(self, res: dict) -> None:
-        sys.stdout.write(json.dumps(res, ensure_ascii=False, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+        try:
+            sys.stdout.write(json.dumps(res, ensure_ascii=False, separators=(",", ":")) + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError) as exc:
+            self.log.exception(Msg.stdio_closed)
+            raise StdioClosed(str(exc)) from exc
