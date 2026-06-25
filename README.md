@@ -8,9 +8,10 @@
 
 - 每个 IP 注册一组明文凭据
 - 为已注册 IP 打开多个持久化会话
-- 支持临时（不保存凭据的）连接
-- 会话 ID 返回给 AI agent
-- 长命令支持游标增量读取输出
+- 会话 ID 返回给 AI agent，并要求模型在回复中带出 `session_id`
+- 交互式发送输入到会话，并支持游标增量读取输出
+- 支持一次 MCP 调用并发向多个会话发送输入
+- 支持临时连接并单次阻塞执行命令（不推荐作为常规方式）
 - 远端断连时显式标记 disconnected 状态
 - 按 IP 进行 SFTP 上传/下载
 - 支持宿主机、Docker 和 Kubernetes 三种命令模式
@@ -157,12 +158,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-repo>/main/setup.sh)
 | `ssh_register(ip, port, username, password)` | 注册 SSH 服务器凭据 |
 | `ssh_update(old_ip, ip, port, username, password)` | 修改已注册 SSH 服务器凭据，支持改 IP |
 | `ssh_delete(ip)` | 删除已注册 SSH 服务器并关闭该 IP 的现有会话 |
-| `ssh_connect(ip)` | 为已注册 IP 打开持久化会话，返回 session_id |
-| `ssh_temp_connect(ip, port, username, password)` | 打开临时会话（不保存凭据） |
+| `ssh_connect(ip)` | 为已注册 IP 打开持久化交互式会话，返回 `session_id`；模型对用户回复时必须带上该 `session_id` |
+| `ssh_send_input(session_id, input, mode?, container?, namespace?, pod?, shell?)` | 向持久化交互式会话发送输入，立即返回 `session_id` 和 `command_id` |
+| `ssh_read_output(session_id, command_id?, cursor?, limit?)` | 从持久化交互式会话按游标读取输出；模型展示结果时必须带上 `session_id` |
+| `ssh_send_many(items)` | 一次调用并发向多个持久化会话发送输入，items 内每项使用 `ssh_send_input` 参数形状 |
+| `ssh_temp_exec(ip, port, username, password, command, mode?, container?, namespace?, pod?, shell?)` | 临时连接、执行单条命令、阻塞读取 stdout/stderr 后关闭；这是单次指令执行，不推荐作为常规方式 |
 | `ssh_list_sessions(ip)` | 列出某 IP 的所有会话（含断连的） |
 | `ssh_close(ip, session_id?)` | 关闭所有或指定会话 |
-| `ssh_exec(session_id, command, mode?, container?, namespace?, pod?, shell?)` | 发送命令到持久化会话 |
-| `ssh_read(session_id, command_id?, cursor?, limit?)` | 按游标增量读取命令输出 |
 | `ssh_status(session_id, command_id?)` | 查询会话或命令状态 |
 | `sftp_upload(ip, local_path, remote_path, session_id?)` | SFTP 上传文件 |
 | `sftp_download(ip, remote_path, local_path, session_id?)` | SFTP 下载文件 |
@@ -195,7 +197,22 @@ H:\Documents\AgentAbility\.ssh_sftp_mcp\ssh_sftp_mcp.log
 
 ## 长命令与输出读取
 
-`ssh_exec` 将命令发送到持久化 shell 后立即返回 `command_id`。使用 `ssh_read` 配合返回的 `command_id` 和游标（cursor）增量读取输出。使用 `ssh_status` 检查命令是否仍在运行或已完成。
+推荐使用持久化交互式会话：`ssh_connect` 打开会话并返回 `session_id`，模型应在对用户回复中输出这个 `session_id`，后续使用 `ssh_send_input` 发送输入，再用 `ssh_read_output` 配合返回的 `command_id` 和游标（cursor）增量读取输出。使用 `ssh_status` 检查命令是否仍在运行或已完成。
+
+`ssh_send_many` 用于在一个 MCP 调用中并发分发多条输入：
+
+```json
+{
+  "items": [
+    {"session_id": "session-a", "input": "pwd"},
+    {"session_id": "session-b", "input": "whoami", "mode": "host"}
+  ]
+}
+```
+
+返回结构会保持 `items` 顺序，每项包含 `index` 和 `ok`。某一项失败时只标记该项 `ok: false` 和 `reason`，不会阻断其他会话的命令分发。
+
+`ssh_temp_exec` 会临时建立 SSH 连接、执行一条命令、阻塞读取 stdout/stderr，然后关闭连接。该方式不会留下可复用会话，不推荐用于连续操作；连续排障、运维和文件处理应优先使用持久化交互式会话。
 
 对于常规 `host`、`docker`、`k8s` 模式，命令会被包裹 POSIX shell 标记，以便检测命令完成和退出码。仅在远端 shell 不兼容 POSIX 时使用 `mode=raw`；原始命令直接发送，无法可靠推断完成状态。
 

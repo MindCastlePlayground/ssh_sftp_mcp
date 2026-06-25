@@ -216,7 +216,7 @@ class SshSession:
                     cmd.end_seq = self.seq
                     cmd.exit_code = int(match.group(1))
 
-    def exec(self, command: str, mode: ExecMode, opts: dict) -> dict:
+    def send(self, command: str, mode: ExecMode, opts: dict) -> dict:
         if not self.probe():
             raise RuntimeError(Msg.disconnected)
         cmd = CommandInfo(command_id=uuid.uuid4().hex, command=command, start_seq=self.seq)
@@ -261,7 +261,7 @@ class SshSession:
             f"printf '\\n{end}:%s\\n' \"$__mcp_code\"\n"
         )
 
-    def read(self, command_id: str | None, cursor: int, limit: int) -> dict:
+    def output(self, command_id: str | None, cursor: int, limit: int) -> dict:
         with self.lock:
             start = cursor
             cmd = None
@@ -346,6 +346,29 @@ class SshSession:
             raise RuntimeError(err.strip() or f"{Msg.remote_failed}: {code}")
         return out
 
+    def once(self, command: str, mode: ExecMode, opts: dict) -> dict:
+        if not self.probe() or not self.client:
+            raise RuntimeError(Msg.disconnected)
+        target = self.target(command, mode, opts)
+        self.log.info("ssh once command session=%s ip=%s mode=%s", self.id, self.info.ip, mode.value)
+        stdin, stdout, stderr = self.client.exec_command(target, timeout=Limits.transfer_timeout)
+        self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
+        out = stdout.read().decode(Text.encoding, errors="replace")
+        err = stderr.read().decode(Text.encoding, errors="replace")
+        code = stdout.channel.recv_exit_status()
+        return {
+            Field.ip: self.info.ip,
+            Field.port: self.info.port,
+            Field.username: self.info.username,
+            Field.command: command,
+            Field.mode: mode.value,
+            Field.output: out,
+            Field.stderr: err,
+            Field.exit_code: code,
+            Field.status: CommandStatus.done.value,
+            Field.ok: code == 0,
+        }
+
     def run_file(self, command: str, local_path: str) -> int:
         if not self.probe() or not self.client:
             raise RuntimeError(Msg.disconnected)
@@ -425,6 +448,16 @@ class SessionManager:
     def temp(self, ip: str, port: int, username: str, password: str) -> dict:
         return self.open(ServerInfo(ip=ip, port=port, username=username, password=password), Origin.temporary)
 
+    def once(self, ip: str, port: int, username: str, password: str, command: str, mode: ExecMode, opts: dict) -> dict:
+        session = SshSession(ServerInfo(ip=ip, port=port, username=username, password=password), Origin.temporary)
+        data = session.conn()
+        try:
+            if session.status != SessionStatus.connected:
+                raise RuntimeError(data.get(Field.reason, Msg.disconnected))
+            return session.once(command, mode, opts)
+        finally:
+            session.close()
+
     def open(self, info: ServerInfo, origin: Origin) -> dict:
         session = SshSession(info, origin)
         data = session.conn()
@@ -450,11 +483,11 @@ class SessionManager:
                 raise KeyError(Msg.unknown_session)
             return self.sessions[session_id]
 
-    def exec(self, session_id: str, command: str, mode: ExecMode, opts: dict) -> dict:
-        return self.get(session_id).exec(command, mode, opts)
+    def send(self, session_id: str, command: str, mode: ExecMode, opts: dict) -> dict:
+        return self.get(session_id).send(command, mode, opts)
 
-    def read(self, session_id: str, command_id: str | None, cursor: int, limit: int) -> dict:
-        return self.get(session_id).read(command_id, cursor, limit)
+    def output(self, session_id: str, command_id: str | None, cursor: int, limit: int) -> dict:
+        return self.get(session_id).output(command_id, cursor, limit)
 
     def status(self, session_id: str, command_id: str | None) -> dict:
         session = self.get(session_id)

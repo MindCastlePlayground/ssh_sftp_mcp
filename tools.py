@@ -33,6 +33,10 @@ class Schemas:
         return data
 
     @staticmethod
+    def array(item: dict) -> dict:
+        return {JsonKey.type: RpcValue.array, JsonKey.items: item}
+
+    @staticmethod
     def mode() -> dict:
         return {JsonKey.type: RpcValue.string, JsonKey.enum: [item.value for item in ExecMode]}
 
@@ -68,27 +72,44 @@ class ToolCatalog:
                 Field.ip: text(),
             }, [Field.ip])),
             cls.item(Tool.connect, ToolDesc.connect, Schemas.obj({Field.ip: text()}, [Field.ip])),
-            cls.item(Tool.temp, ToolDesc.temp, Schemas.obj({
+            cls.item(Tool.once, ToolDesc.once, Schemas.obj({
                 Field.ip: text(),
                 Field.port: integer(Default.port),
                 Field.username: text(),
                 Field.password: text(),
-            }, [Field.ip, Field.port, Field.username, Field.password])),
-            cls.item(Tool.sessions, ToolDesc.sessions, Schemas.obj({Field.ip: text()}, [Field.ip])),
-            cls.item(Tool.close, ToolDesc.close, Schemas.obj({
-                Field.ip: text(),
-                Field.session_id: text(),
-            }, [Field.ip])),
-            cls.item(Tool.exec, ToolDesc.exec, Schemas.obj({
-                Field.session_id: text(),
                 Field.command: text(),
                 Field.mode: Schemas.mode(),
                 Field.container: text(),
                 Field.namespace: text(),
                 Field.pod: text(),
                 Field.shell: text(),
-            }, [Field.session_id, Field.command])),
-            cls.item(Tool.read, ToolDesc.read, Schemas.obj({
+            }, [Field.ip, Field.port, Field.username, Field.password, Field.command])),
+            cls.item(Tool.sessions, ToolDesc.sessions, Schemas.obj({Field.ip: text()}, [Field.ip])),
+            cls.item(Tool.close, ToolDesc.close, Schemas.obj({
+                Field.ip: text(),
+                Field.session_id: text(),
+            }, [Field.ip])),
+            cls.item(Tool.send, ToolDesc.send, Schemas.obj({
+                Field.session_id: text(),
+                Field.input: text(),
+                Field.mode: Schemas.mode(),
+                Field.container: text(),
+                Field.namespace: text(),
+                Field.pod: text(),
+                Field.shell: text(),
+            }, [Field.session_id, Field.input])),
+            cls.item(Tool.send_many, ToolDesc.send_many, Schemas.obj({
+                Field.items: Schemas.array(Schemas.obj({
+                    Field.session_id: text(),
+                    Field.input: text(),
+                    Field.mode: Schemas.mode(),
+                    Field.container: text(),
+                    Field.namespace: text(),
+                    Field.pod: text(),
+                    Field.shell: text(),
+                }, [Field.session_id, Field.input])),
+            }, [Field.items])),
+            cls.item(Tool.output, ToolDesc.output, Schemas.obj({
                 Field.session_id: text(),
                 Field.command_id: text(),
                 Field.cursor: integer(0),

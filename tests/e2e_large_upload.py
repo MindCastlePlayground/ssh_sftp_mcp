@@ -134,11 +134,23 @@ class LargeTransferE2E:
                 shutil.rmtree(self.local_dir, ignore_errors=True)
 
     def connect(self) -> None:
-        data = self.tool.call(Tool.temp, {
+        try:
+            self.tool.call(Tool.register, {
+                Field.ip: self.host,
+                Field.port: self.port,
+                Field.username: self.user,
+                Field.password: self.password,
+            })
+        except RuntimeError:
+            self.tool.call(Tool.update, {
+                Field.old_ip: self.host,
+                Field.ip: self.host,
+                Field.port: self.port,
+                Field.username: self.user,
+                Field.password: self.password,
+            })
+        data = self.tool.call(Tool.connect, {
             Field.ip: self.host,
-            Field.port: self.port,
-            Field.username: self.user,
-            Field.password: self.password,
         })
         self.session_id = data[Field.session_id]
 
@@ -181,9 +193,9 @@ class LargeTransferE2E:
         return code
 
     def remote(self, command: str) -> tuple[int, str]:
-        data = self.tool.call(Tool.exec, {
+        data = self.tool.call(Tool.send, {
             Field.session_id: self.session_id,
-            Field.command: command,
+            Field.input: command,
             Field.mode: ExecMode.host.value,
         })
         return self.wait(data[Field.command_id])
@@ -193,7 +205,7 @@ class LargeTransferE2E:
         cursor = 0
         output = []
         while time.time() < deadline:
-            read = self.tool.call(Tool.read, {
+            read = self.tool.call(Tool.output, {
                 Field.session_id: self.session_id,
                 Field.command_id: command_id,
                 Field.cursor: cursor,
@@ -208,7 +220,7 @@ class LargeTransferE2E:
             })
             command = status[Field.command]
             if command[Field.status] == CommandStatus.done.value:
-                read = self.tool.call(Tool.read, {
+                read = self.tool.call(Tool.output, {
                     Field.session_id: self.session_id,
                     Field.command_id: command_id,
                     Field.cursor: cursor,

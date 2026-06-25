@@ -128,6 +128,7 @@ class Field:
     session_id = "session_id"
     command_id = "command_id"
     command = "command"
+    input = "input"
     cursor = "cursor"
     limit = "limit"
     local_path = "local_path"
@@ -144,6 +145,7 @@ class Field:
     reason = "reason"
     exit_code = "exit_code"
     output = "output"
+    stderr = "stderr"
     next_cursor = "next_cursor"
     done = "done"
     started_at = "started_at"
@@ -161,6 +163,9 @@ class Field:
     mtime = "mtime"
     mtime_ns = "mtime_ns"
     size = "size"
+    items = "items"
+    index = "index"
+    ok = "ok"
 
 
 class Tool:
@@ -168,11 +173,12 @@ class Tool:
     update = "ssh_update"
     delete = "ssh_delete"
     connect = "ssh_connect"
-    temp = "ssh_temp_connect"
+    send = "ssh_send_input"
+    send_many = "ssh_send_many"
+    output = "ssh_read_output"
+    once = "ssh_temp_exec"
     sessions = "ssh_list_sessions"
     close = "ssh_close"
-    exec = "ssh_exec"
-    read = "ssh_read"
     status = "ssh_status"
     upload = "sftp_upload"
     download = "sftp_download"
@@ -184,12 +190,13 @@ class ToolDesc:
     register = "Register one SSH server by IP with plaintext password credentials."
     update = "Update a registered SSH server. Use old_ip when changing ip."
     delete = "Delete one registered SSH server by IP and close its live sessions."
-    connect = "Open a persistent SSH shell session for a registered IP and return a session ID."
-    temp = "Open a persistent SSH shell session without saving credentials and return a session ID."
+    connect = "Open a persistent interactive SSH shell session for a registered IP. Return session_id and include that session_id in the model's user-facing response so later calls can reuse it."
+    send = "Send input to an existing persistent interactive SSH session. Return session_id and command_id; include session_id in the model's user-facing response and read output with ssh_read_output."
+    send_many = "Send inputs to multiple persistent interactive SSH sessions concurrently. Each item follows ssh_send_input shape and returns its session_id."
+    output = "Read buffered output from a persistent interactive SSH session by cursor. Require session_id and include that session_id in the model's user-facing response."
+    once = "Temporarily connect, execute one command, block until stdout/stderr are read, then close. This is a single-use command runner and is not recommended; prefer persistent interactive sessions with ssh_connect, ssh_send_input, and ssh_read_output."
     sessions = "List existing sessions for an IP, including disconnected sessions."
     close = "Close all sessions for an IP, or one session when session_id is supplied."
-    exec = "Send a command to a persistent session. Supports host, docker, and k8s modes."
-    read = "Read buffered output by cursor for a session or command."
     status = "Return session status and optional command status."
     upload = "Upload a local file to a server with SFTP."
     download = "Download a remote file from a server with SFTP."
@@ -217,6 +224,8 @@ class Msg:
     stdio_eof = "stdio input closed"
     stdio_closed = "stdio output closed"
     server_failed = "mcp server stopped unexpectedly"
+    bad_batch = "invalid batch items"
+    batch_too_large = "batch item limit exceeded"
 
 
 class TransferMethod:
@@ -286,5 +295,7 @@ class Limits:
     connect_timeout = 15
     keepalive = 30
     prep_wait = 0.2
+    batch = 32
+    batch_workers = 8
     sftp_prefetch = 64
     transfer_timeout = None

@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -22,14 +23,28 @@ class SmokeTest(unittest.TestCase):
         self.assertIn(Tool.update, names)
         self.assertIn(Tool.delete, names)
         self.assertIn(Tool.connect, names)
-        self.assertIn(Tool.temp, names)
+        self.assertIn(Tool.once, names)
         self.assertIn(Tool.sessions, names)
         self.assertIn(Tool.close, names)
-        self.assertIn(Tool.exec, names)
-        self.assertIn(Tool.read, names)
+        self.assertIn(Tool.send, names)
+        self.assertIn(Tool.send_many, names)
+        self.assertIn(Tool.output, names)
         self.assertIn(Tool.upload, names)
         self.assertIn(Tool.download, names)
         self.assertIn(Tool.version, names)
+
+    def test_catalog_guides_interactive_session_ids(self):
+        items = {item[JsonKey.name]: item for item in ToolCatalog.list()}
+        for name in (Tool.connect, Tool.send, Tool.output):
+            self.assertIn(Field.session_id, items[name][JsonKey.description])
+        self.assertIn("not recommended", items[Tool.once][JsonKey.description])
+
+    def test_old_tool_names_are_not_compatible(self):
+        service = ToolService(object())
+        for name in ("ssh_persistent_session", "ssh_temp_connect", "ssh_exec", "ssh_exec_many", "ssh_read"):
+            res = service.call(name, {})
+            self.assertTrue(res[JsonKey.is_error])
+            self.assertIn(Msg.tool_not_found, res[JsonKey.structured][Field.reason])
 
     def test_register_duplicate_ip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,6 +164,97 @@ class SmokeTest(unittest.TestCase):
             path.write_text("class Api:\n    def value(self):\n        return 'v2'\n", encoding=Text.encoding)
             third = host.info()
             self.assertNotEqual(third[Field.loaded_version], third[Field.version])
+
+    def test_exec_many_runs_items_concurrently(self):
+        class Manager:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.active = 0
+                self.max_active = 0
+
+            def send(self, session_id, command, mode, opts):
+                with self.lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                time.sleep(0.05)
+                with self.lock:
+                    self.active -= 1
+                return {
+                    Field.session_id: session_id,
+                    Field.command_id: f"cmd-{session_id}",
+                    Field.input: command,
+                    Field.status: CommandStatus.queued.value,
+                }
+
+        manager = Manager()
+        service = ToolService(manager)
+        res = service.call(Tool.send_many, {
+            Field.items: [
+                {Field.session_id: "s1", Field.input: "pwd"},
+                {Field.session_id: "s2", Field.input: "whoami"},
+            ]
+        })
+        self.assertFalse(res[JsonKey.is_error])
+        data = res[JsonKey.structured][Field.items]
+        self.assertEqual([item[Field.index] for item in data], [0, 1])
+        self.assertEqual([item[Field.session_id] for item in data], ["s1", "s2"])
+        self.assertTrue(all(item[Field.ok] for item in data))
+        self.assertGreater(manager.max_active, 1)
+
+    def test_exec_many_keeps_per_item_errors(self):
+        class Manager:
+            def send(self, session_id, command, mode, opts):
+                if session_id == "bad":
+                    raise RuntimeError("no session")
+                return {
+                    Field.session_id: session_id,
+                    Field.command_id: f"cmd-{session_id}",
+                    Field.input: command,
+                    Field.status: CommandStatus.queued.value,
+                }
+
+        service = ToolService(Manager())
+        res = service.call(Tool.send_many, {
+            Field.items: [
+                {Field.session_id: "ok", Field.input: "pwd"},
+                {Field.session_id: "bad", Field.input: "pwd"},
+                "bad item",
+            ]
+        })
+        self.assertFalse(res[JsonKey.is_error])
+        data = res[JsonKey.structured][Field.items]
+        self.assertEqual([item[Field.index] for item in data], [0, 1, 2])
+        self.assertTrue(data[0][Field.ok])
+        self.assertFalse(data[1][Field.ok])
+        self.assertFalse(data[2][Field.ok])
+        self.assertEqual(data[2][Field.status], Msg.bad_batch)
+
+    def test_temp_exec_routes_to_blocking_once(self):
+        class Manager:
+            def once(self, ip, port, username, password, command, mode, opts):
+                return {
+                    Field.ip: ip,
+                    Field.port: port,
+                    Field.username: username,
+                    Field.command: command,
+                    Field.mode: mode.value,
+                    Field.output: "ok\n",
+                    Field.stderr: "",
+                    Field.exit_code: 0,
+                    Field.ok: True,
+                }
+
+        service = ToolService(Manager())
+        res = service.call(Tool.once, {
+            Field.ip: "127.0.0.1",
+            Field.port: 22,
+            Field.username: "u",
+            Field.password: "p",
+            Field.command: "echo ok",
+        })
+        self.assertFalse(res[JsonKey.is_error])
+        self.assertEqual(res[JsonKey.structured][Field.output], "ok\n")
+        self.assertTrue(res[JsonKey.structured][Field.ok])
 
     def test_json_rpc_recovers_from_handler_exception(self):
         class BadServer:
