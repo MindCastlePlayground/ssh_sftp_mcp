@@ -216,6 +216,10 @@ H:\Documents\AgentAbility\.ssh_sftp_mcp\ssh_sftp_mcp.log
 
 对于常规 `host`、`docker`、`k8s` 模式，命令会被包裹 POSIX shell 标记，以便检测命令完成和退出码。仅在远端 shell 不兼容 POSIX 时使用 `mode=raw`；原始命令直接发送，无法可靠推断完成状态。
 
+交互式程序内部输入应使用 `mode=raw`。例如先用 `host` 发送 `psql ...` 进入 PostgreSQL 提示符后，后续 SQL、`\c other_db`、`\dt` 等 psql 指令都应通过 `mode=raw` 发送；服务器只保证这些字符完整写入 SSH channel，不再包裹 marker，也不会判断 SQL 是否执行完成。是否完成应通过 `ssh_read_output` 的游标增量读取和远端提示符判断。
+
+`ssh_read_output` 的 `cursor` 是输出流位置。返回的 `next_cursor` 可直接用于下一次读取；即使单个 SSH recv 块大于 `limit`，也会按 `limit` 分段返回，避免大输出一次性堆积到调用方。
+
 ## Docker 与 Kubernetes 模式
 
 Docker 模式将命令包裹为：

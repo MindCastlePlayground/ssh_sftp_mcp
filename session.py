@@ -195,8 +195,9 @@ class SshSession:
 
     def add(self, text: str) -> int:
         with self.lock:
-            self.seq += 1
-            self.chunks.append(OutputChunk(seq=self.seq, text=text))
+            start = self.seq
+            self.seq += len(text)
+            self.chunks.append(OutputChunk(seq=self.seq, text=text, start=start))
             if len(self.chunks) > Limits.chunks:
                 self.chunks = self.chunks[-Limits.chunks:]
             return self.seq
@@ -226,8 +227,31 @@ class SshSession:
             if not self.channel:
                 raise RuntimeError(Msg.disconnected)
             self.log.info("ssh exec session=%s command=%s mode=%s", self.id, cmd.command_id, mode.value)
-            self.channel.send(payload)
+            channel = self.channel
+        self.write(channel, payload)
+        if mode == ExecMode.raw:
+            with self.lock:
+                cmd.status = CommandStatus.done
+                cmd.ended_at = time.time()
+                cmd.reason = Msg.raw_sent
         return cmd.data() | {Field.session_id: self.id}
+
+    def write(self, channel: paramiko.Channel, payload: str) -> None:
+        data = payload.encode(Text.encoding)
+        sent = 0
+        while sent < len(data):
+            if getattr(channel, "closed", False):
+                raise RuntimeError(Msg.disconnected)
+            if hasattr(channel, "send_ready") and not channel.send_ready():
+                time.sleep(Limits.poll)
+                continue
+            part = data[sent:sent + Limits.send]
+            count = channel.send(part)
+            if count is None:
+                count = len(part)
+            if count <= 0:
+                raise RuntimeError(Msg.disconnected)
+            sent += count
 
     def target(self, command: str, mode: ExecMode, opts: dict) -> str:
         if mode == ExecMode.docker:
@@ -270,14 +294,19 @@ class SshSession:
                     raise KeyError(Msg.unknown_command)
                 cmd = self.commands[command_id]
                 start = max(start, cmd.start_seq)
-            selected = [chunk for chunk in self.chunks if chunk.seq > start]
             text = ""
-            next_cursor = cursor
-            for chunk in selected:
+            next_cursor = start
+            for chunk in self.chunks:
+                if chunk.seq <= start:
+                    continue
                 if len(text) >= limit:
                     break
-                text += chunk.text
-                next_cursor = chunk.seq
+                pos = max(start, chunk.start)
+                off = pos - chunk.start
+                room = limit - len(text)
+                part = chunk.text[off:off + room]
+                text += part
+                next_cursor = pos + len(part)
             return {
                 Field.session_id: self.id,
                 Field.command_id: command_id,

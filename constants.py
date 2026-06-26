@@ -191,7 +191,7 @@ class ToolDesc:
     update = "Update a registered SSH server. Use old_ip when changing ip."
     delete = "Delete one registered SSH server by IP and close its live sessions."
     connect = "Open a persistent interactive SSH shell session for a registered IP. Return session_id and include that session_id in the model's user-facing response so later calls can reuse it."
-    send = "Send input to an existing persistent interactive SSH session. Return session_id and command_id; include session_id in the model's user-facing response and read output with ssh_read_output."
+    send = "Send input to an existing persistent interactive SSH session. Use host/docker/k8s for shell commands. Use raw for REPL programs such as psql so SQL and backslash meta-commands are sent unchanged. Return session_id and command_id; include session_id in the model's user-facing response and read output with ssh_read_output."
     send_many = "Send inputs to multiple persistent interactive SSH sessions concurrently. Each item follows ssh_send_input shape and returns its session_id."
     output = "Read buffered output from a persistent interactive SSH session by cursor. Require session_id and include that session_id in the model's user-facing response."
     once = "Temporarily connect, execute one command, block until stdout/stderr are read, then close. This is a single-use command runner and is not recommended; prefer persistent interactive sessions with ssh_connect, ssh_send_input, and ssh_read_output."
@@ -226,6 +226,7 @@ class Msg:
     server_failed = "mcp server stopped unexpectedly"
     bad_batch = "invalid batch items"
     batch_too_large = "batch item limit exceeded"
+    raw_sent = "raw input sent; completion is not tracked"
 
 
 class TransferMethod:
@@ -290,6 +291,7 @@ class Limits:
     tail = 8192
     read = Default.read
     recv = 32768
+    send = 32768
     file_chunk = 1048576
     poll = 0.05
     connect_timeout = 15

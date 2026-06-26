@@ -41,6 +41,7 @@ class ServerInfo:
 class OutputChunk:
     seq: int
     text: str
+    start: int = 0
     at: float = field(default_factory=time)
 
     def data(self) -> dict:
@@ -100,4 +101,3 @@ class SessionView:
             Field.started_at: self.started_at,
             Field.last_seen_at: self.last_seen_at,
         }
-

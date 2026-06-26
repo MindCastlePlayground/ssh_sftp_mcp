@@ -296,6 +296,68 @@ class SmokeTest(unittest.TestCase):
         text = "__MCP_CMD_abc_START__\r\n\x1b[?2004lok\r\n__MCP_CMD_abc_END__:0\r\nroot@host:~# "
         self.assertEqual(session.clean(text, cmd), "ok")
 
+    def test_channel_write_sends_full_payload(self):
+        class Channel:
+            def __init__(self):
+                self.parts = []
+
+            def send_ready(self):
+                return True
+
+            def send(self, data):
+                size = min(7, len(data))
+                self.parts.append(data[:size])
+                return size
+
+        channel = Channel()
+        session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+        payload = "select '" + ("x" * (Limits.send + 23)) + "';"
+        session.write(channel, payload)
+        self.assertEqual(b"".join(channel.parts).decode(Text.encoding), payload)
+
+    def test_output_limit_advances_inside_one_chunk(self):
+        session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+        session.add("abcdef")
+        first = session.output(None, 0, 2)
+        second = session.output(None, first[Field.next_cursor], 2)
+        third = session.output(None, second[Field.next_cursor], 10)
+        self.assertEqual(first[Field.output], "ab")
+        self.assertEqual(second[Field.output], "cd")
+        self.assertEqual(third[Field.output], "ef")
+
+    def test_raw_mode_preserves_psql_meta_command(self):
+        class Transport:
+            def is_active(self):
+                return True
+
+        class Channel:
+            closed = False
+
+            def __init__(self):
+                self.parts = []
+
+            def send_ready(self):
+                return True
+
+            def send(self, data):
+                self.parts.append(data)
+                return len(data)
+
+        class Client:
+            def get_transport(self):
+                return Transport()
+
+        channel = Channel()
+        session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+        session.status = SessionStatus.connected
+        session.client = Client()
+        session.channel = channel
+        data = session.send("\\c app_db", ExecMode.raw, {})
+        payload = b"".join(channel.parts).decode(Text.encoding)
+        self.assertEqual(payload, "\\c app_db\n")
+        self.assertEqual(data[Field.status], CommandStatus.done.value)
+        self.assertEqual(data[Field.reason], Msg.raw_sent)
+
     def test_container_modes_validate_required_target(self):
         session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
         with self.assertRaises(ValueError):
