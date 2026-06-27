@@ -366,53 +366,74 @@ class SmokeTest(unittest.TestCase):
         app.once(json.dumps({JsonKey.jsonrpc: RpcValue.version, JsonKey.id: 9, JsonKey.method: RpcMethod.ping}))
         self.assertEqual(captured[0][JsonKey.error][JsonKey.code], RpcError.internal)
 
-    def test_command_marker_split_across_chunks(self):
+    def test_command_prompt_split_across_chunks(self):
         session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
         cmd = CommandInfo(command_id="abc", command="echo ok")
+        cmd.status = CommandStatus.running
         session.commands[cmd.command_id] = cmd
-        session.scan("__MCP_CMD_abc_STA")
-        session.scan("RT__")
+        session.scan("ok\r\nroot@host:~")
         self.assertEqual(cmd.status, CommandStatus.running)
-        session.scan("__MCP_CMD_abc_END")
-        session.scan("__:7")
+        session.scan("# ")
         self.assertEqual(cmd.status, CommandStatus.done)
-        self.assertEqual(cmd.exit_code, 7)
+        self.assertIsNone(cmd.exit_code)
 
-    def test_command_echo_without_exit_code_does_not_finish(self):
+    def test_command_prompt_without_exit_code_finishes(self):
+        session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+        cmd = CommandInfo(command_id="abc", command="echo ok")
+        cmd.status = CommandStatus.running
+        session.commands[cmd.command_id] = cmd
+        session.scan("root@host:~$ ")
+        self.assertEqual(cmd.status, CommandStatus.done)
+        self.assertIsNone(cmd.exit_code)
+
+    def test_command_read_cleans_echo_and_prompt(self):
         session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
         cmd = CommandInfo(command_id="abc", command="echo ok")
         session.commands[cmd.command_id] = cmd
-        session.scan("__MCP_CMD_abc_END__")
-        self.assertNotEqual(cmd.status, CommandStatus.done)
-        session.scan(":0")
-        self.assertEqual(cmd.status, CommandStatus.done)
-        self.assertEqual(cmd.exit_code, 0)
-
-    def test_command_read_cleans_markers_and_prompt(self):
-        session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
-        cmd = CommandInfo(command_id="abc", command="echo ok")
-        session.commands[cmd.command_id] = cmd
-        text = "__MCP_CMD_abc_START__\r\n\x1b[?2004lok\r\n__MCP_CMD_abc_END__:0\r\nroot@host:~# "
+        text = "echo ok\r\n\x1b[?2004lok\r\nroot@host:~# "
         self.assertEqual(session.clean(text, cmd), "ok")
 
-    def test_channel_write_sends_full_payload(self):
-        class Channel:
+    def test_command_read_keeps_output_before_known_prompt(self):
+        session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+        session.prompt = "test-shell$ "
+        cmd = CommandInfo(command_id="abc", command='printf "$A"')
+        session.commands[cmd.command_id] = cmd
+        text = "value-1test-shell$ "
+        self.assertEqual(session.clean(text, cmd), "value-1")
+
+    def test_host_mode_sends_command_without_wrapper(self):
+        class Net:
             def __init__(self):
                 self.parts = []
 
-            def send_ready(self):
+            def alive(self):
                 return True
 
-            def send(self, data):
-                size = min(7, len(data))
-                self.parts.append(data[:size])
-                return size
+            def write(self, text):
+                self.parts.append(text)
 
-        channel = Channel()
+        net = Net()
+        session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
+        session.status = SessionStatus.connected
+        session.net = net
+        data = session.send("export A=B", ExecMode.host, {})
+        payload = "".join(net.parts)
+        self.assertEqual(payload, "export A=B\n")
+        self.assertEqual(data[Field.status], CommandStatus.running.value)
+
+    def test_netmiko_write_sends_full_payload(self):
+        class Net:
+            def __init__(self):
+                self.text = ""
+
+            def write(self, text):
+                self.text += text
+
+        net = Net()
         session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
         payload = "select '" + ("x" * (Limits.send + 23)) + "';"
-        session.write(channel, payload)
-        self.assertEqual(b"".join(channel.parts).decode(Text.encoding), payload)
+        session.write(net, payload)
+        self.assertEqual(net.text, payload)
 
     def test_output_limit_advances_inside_one_chunk(self):
         session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
@@ -425,34 +446,22 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(third[Field.output], "ef")
 
     def test_raw_mode_preserves_psql_meta_command(self):
-        class Transport:
-            def is_active(self):
-                return True
-
-        class Channel:
-            closed = False
-
+        class Net:
             def __init__(self):
                 self.parts = []
 
-            def send_ready(self):
+            def alive(self):
                 return True
 
-            def send(self, data):
-                self.parts.append(data)
-                return len(data)
+            def write(self, text):
+                self.parts.append(text)
 
-        class Client:
-            def get_transport(self):
-                return Transport()
-
-        channel = Channel()
+        net = Net()
         session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
         session.status = SessionStatus.connected
-        session.client = Client()
-        session.channel = channel
+        session.net = net
         data = session.send("\\c app_db", ExecMode.raw, {})
-        payload = b"".join(channel.parts).decode(Text.encoding)
+        payload = "".join(net.parts)
         self.assertEqual(payload, "\\c app_db\n")
         self.assertEqual(data[Field.status], CommandStatus.done.value)
         self.assertEqual(data[Field.reason], Msg.raw_sent)
@@ -582,10 +591,6 @@ class SmokeTest(unittest.TestCase):
             sys.stdout = old
 
     def test_shell_upload_streams_file_chunks(self):
-        class Transport:
-            def is_active(self):
-                return True
-
         class WriteChannel:
             def __init__(self):
                 self.timeout = "unset"
@@ -625,29 +630,31 @@ class SmokeTest(unittest.TestCase):
             def read(self):
                 return b""
 
-        class Client:
+        class Net:
             def __init__(self):
                 self.stdin = Stdin()
+                self.timeout = "unset"
 
-            def get_transport(self):
-                return Transport()
+            def alive(self):
+                return True
 
-            def exec_command(self, command, timeout=None):
-                self.timeout = timeout
+            def exec(self, command):
+                self.command = command
+                self.timeout = Limits.transfer_timeout
                 return self.stdin, Stdout(), Stderr()
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "large.bin"
             path.write_bytes(b"x" * (Limits.file_chunk + 3))
-            client = Client()
+            net = Net()
             session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
             session.status = SessionStatus.connected
-            session.client = client
+            session.net = net
             size = session.shell_upload(str(path), "/tmp/large.bin")
         self.assertEqual(size, Limits.file_chunk + 3)
-        self.assertEqual(client.stdin.writes, [Limits.file_chunk, 3])
-        self.assertIsNone(client.timeout)
-        self.assertIsNone(client.stdin.channel.timeout)
+        self.assertEqual(net.stdin.writes, [Limits.file_chunk, 3])
+        self.assertIsNone(net.timeout)
+        self.assertIsNone(net.stdin.channel.timeout)
 
     def test_sftp_download_uses_bounded_prefetch(self):
         class Sftp:
@@ -675,10 +682,6 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(sftp.max_prefetch, Limits.sftp_prefetch)
 
     def test_shell_download_streams_file_chunks(self):
-        class Transport:
-            def is_active(self):
-                return True
-
         class Stdin:
             def __init__(self):
                 self.closed = False
@@ -713,32 +716,34 @@ class SmokeTest(unittest.TestCase):
             def read(self):
                 return b""
 
-        class Client:
+        class Net:
             def __init__(self):
                 self.stdin = Stdin()
                 self.stdout = Stdout([b"x" * Limits.file_chunk, b"y" * 3])
+                self.timeout = "unset"
 
-            def get_transport(self):
-                return Transport()
+            def alive(self):
+                return True
 
-            def exec_command(self, command, timeout=None):
-                self.timeout = timeout
+            def exec(self, command):
+                self.command = command
+                self.timeout = Limits.transfer_timeout
                 return self.stdin, self.stdout, Stderr()
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "large.bin"
-            client = Client()
+            net = Net()
             session = SshSession(ServerInfo("127.0.0.1", 22, "u", "p"), Origin.temporary)
             session.status = SessionStatus.connected
-            session.client = client
+            session.net = net
             size = session.shell_download("/tmp/large.bin", str(path))
             saved_size = path.stat().st_size
         self.assertEqual(size, Limits.file_chunk + 3)
         self.assertEqual(saved_size, Limits.file_chunk + 3)
-        self.assertEqual(client.stdout.reads, [Limits.file_chunk, Limits.file_chunk, Limits.file_chunk])
-        self.assertIsNone(client.timeout)
-        self.assertIsNone(client.stdin.channel.timeout)
-        self.assertIsNone(client.stdout.channel.timeout)
+        self.assertEqual(net.stdout.reads, [Limits.file_chunk, Limits.file_chunk, Limits.file_chunk])
+        self.assertIsNone(net.timeout)
+        self.assertIsNone(net.stdin.channel.timeout)
+        self.assertIsNone(net.stdout.channel.timeout)
 
     def test_transfer_skips_shell_fallback_when_sftp_disconnects(self):
         class Log:

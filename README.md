@@ -19,10 +19,10 @@
 ## 依赖
 
 ```bash
-pip install paramiko
+pip install netmiko
 ```
 
-唯一的外部依赖是 `paramiko`（SSH 协议库），其余均为 Python 标准库。
+唯一需要显式安装的外部依赖是 `netmiko`。Netmiko 会带入 Paramiko；本项目通过 Netmiko 管理 SSH 会话，并在 SFTP/流式传输场景复用其底层 Paramiko 连接。
 
 ## 运行
 
@@ -146,7 +146,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
 脚本会自动完成：
 - 检查 Python 环境
-- 安装 paramiko 依赖
+- 安装 netmiko 依赖
 - 创建状态存储目录
 - 生成 `.mcp.json`（Claude Code）和 `opencode.json`（OpenCode）配置文件
 
@@ -165,7 +165,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-repo>/main/setup.sh)
 
 脚本会自动完成：
 - 检查 Python 3 环境
-- 创建虚拟环境（可选）并安装 paramiko
+- 创建虚拟环境（可选）并安装 netmiko
 - 创建状态存储目录
 - 生成 MCP 配置文件
 - 同时写入 Claude Code（`.mcp.json`）和 OpenCode（`opencode.json`）配置
@@ -235,9 +235,9 @@ H:\Documents\AgentAbility\.ssh_sftp_mcp\ssh_sftp_mcp.log
 
 `ssh_temp_exec` 会临时建立 SSH 连接、执行一条命令、阻塞读取 stdout/stderr，然后关闭连接。该方式不会留下可复用会话，不推荐用于连续操作；连续排障、运维和文件处理应优先使用持久化交互式会话。
 
-对于常规 `host`、`docker`、`k8s` 模式，命令会被包裹 POSIX shell 标记，以便检测命令完成和退出码。仅在远端 shell 不兼容 POSIX 时使用 `mode=raw`；原始命令直接发送，无法可靠推断完成状态。
+对于常规 `host`、`docker`、`k8s` 模式，持久会话采用 Netmiko 风格的命令边界：直接发送命令行，等待远端 shell prompt 返回后标记完成。该模式不再注入 POSIX marker/wrapper，因此 `cd`、`export` 等会保留在同一个交互 shell 中；代价是持久会话无法可靠返回 `exit_code`，需要退出码时使用 `ssh_temp_exec`。
 
-交互式程序内部输入应使用 `mode=raw`。例如先用 `host` 发送 `psql ...` 进入 PostgreSQL 提示符后，后续 SQL、`\c other_db`、`\dt` 等 psql 指令都应通过 `mode=raw` 发送；服务器只保证这些字符完整写入 SSH channel，不再包裹 marker，也不会判断 SQL 是否执行完成。是否完成应通过 `ssh_read_output` 的游标增量读取和远端提示符判断。
+同一个持久 shell 一次只能有一个可追踪命令处于运行状态；需要向 REPL、数据库 CLI 或其他交互式程序继续输入时应使用 `mode=raw`。例如先用 `host` 发送 `psql ...` 进入 PostgreSQL 提示符后，后续 SQL、`\c other_db`、`\dt` 等 psql 指令都应通过 `mode=raw` 发送；服务器只保证这些字符完整写入 SSH channel，不判断 SQL 是否执行完成。是否完成应通过 `ssh_read_output` 的游标增量读取和远端提示符判断。
 
 `ssh_read_output` 的 `cursor` 是输出流位置。返回的 `next_cursor` 可直接用于下一次读取；即使单个 SSH recv 块大于 `limit`，也会按 `limit` 分段返回，避免大输出一次性堆积到调用方。
 

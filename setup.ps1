@@ -28,14 +28,14 @@ if (-not $python) {
     exit 1
 }
 
-# --- 2. 安装 paramiko ---
-Write-Host "[2/5] 安装 paramiko 依赖..." -ForegroundColor Yellow
-& $python -m pip install paramiko --quiet
+# --- 2. 安装 netmiko ---
+Write-Host "[2/5] 安装 netmiko 依赖..." -ForegroundColor Yellow
+& $python -m pip install netmiko --quiet
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  [ERROR] paramiko 安装失败。" -ForegroundColor Red
+    Write-Host "  [ERROR] netmiko 安装失败。" -ForegroundColor Red
     exit 1
 }
-Write-Host "  [OK] paramiko 已安装" -ForegroundColor Green
+Write-Host "  [OK] netmiko 已安装" -ForegroundColor Green
 
 # --- 3. 确定路径 ---
 $projectRoot = Split-Path -Parent $PSScriptRoot

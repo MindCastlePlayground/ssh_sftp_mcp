@@ -81,6 +81,30 @@ class Default:
     read = 65536
 
 
+class NetmikoKey:
+    device_type = "device_type"
+    host = "host"
+    port = "port"
+    username = "username"
+    password = "password"
+    conn_timeout = "conn_timeout"
+    auth_timeout = "auth_timeout"
+    banner_timeout = "banner_timeout"
+    blocking_timeout = "blocking_timeout"
+    timeout = "timeout"
+    session_timeout = "session_timeout"
+    keepalive = "keepalive"
+    allow_agent = "allow_agent"
+    use_keys = "use_keys"
+    fast_cli = "fast_cli"
+    encoding = "encoding"
+    default_enter = "default_enter"
+
+
+class NetmikoValue:
+    terminal = "terminal_server"
+
+
 class JsonKey:
     jsonrpc = "jsonrpc"
     id = "id"
@@ -203,6 +227,46 @@ class Field:
     ok = "ok"
 
 
+class LiveEnv:
+    enabled = "SSH_SFTP_MCP_E2E_REAL"
+    config = "SSH_SFTP_MCP_E2E_CONFIG"
+
+
+class LiveConfigKey:
+    host = "host"
+    user = "user"
+    port = "port"
+    credential_xml = "credentialXml"
+
+
+class LiveRole:
+    public = "public"
+    private = "private"
+
+
+class LiveName:
+    pg_container = "ssh_sftp_mcp_pg"
+    pg_image = "docker.m.daocloud.io/library/postgres:16-alpine"
+    pg_user = "codex"
+    pg_password = "CodexPass_2026"
+    pg_db = "codex_e2e"
+    pg_port = 15432
+
+
+class LiveMarker:
+    private_basic = "private-basic-ok"
+    public_basic = "public-basic-ok"
+    escape = "ESC: space semi; dollar:$ backslash:\\ quote:\" single:' pipe:| amp:&"
+    weak = "weak-done"
+    prompt_password = "Password:"
+    prompt_choice = "Continue? [y/n]"
+    interactive_pw = "PW:codex-secret"
+    interactive_choice = "YN:y"
+    container = "container-ok"
+    database = "db-ok"
+    container_database = "container-db-ok"
+
+
 class Tool:
     register = "ssh_register"
     update = "ssh_update"
@@ -266,6 +330,7 @@ class Msg:
     bad_batch = "invalid batch items"
     batch_too_large = "batch item limit exceeded"
     raw_sent = "raw input sent; completion is not tracked"
+    command_running = "another command is still running in this session"
 
 
 class TransferMethod:
@@ -308,21 +373,18 @@ class ExecMode(Enum):
     raw = "raw"
 
 
-class Mark:
-    prefix = "__MCP_CMD_"
-    start = "_START__"
-    end = "_END__"
-    code = ":"
+class Prompt:
+    pattern = r"(?m)(?:^|\n)[^\n]{0,200}[#>$%]\s*$"
+    line = r"[^\n]{0,200}[#>$%]\s*$"
 
 
 class Shell:
+    enter = "\n"
     echo_off = "stty -echo 2>/dev/null || true\n"
 
 
 class Regex:
     ansi = r"\x1b\[[0-?]*[ -/]*[@-~]"
-    start = r"__MCP_CMD_[0-9a-f]+_START__\r?\n?"
-    end = r"__MCP_CMD_[0-9a-f]+_END__:\d+\r?\n?"
 
 
 class Limits:
@@ -334,6 +396,8 @@ class Limits:
     file_chunk = 1048576
     poll = 0.05
     connect_timeout = 15
+    blocking_timeout = 20
+    session_timeout = 60
     keepalive = 30
     prep_wait = 0.2
     batch = 32

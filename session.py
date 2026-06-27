@@ -9,8 +9,10 @@ import posixpath
 from pathlib import Path
 
 import paramiko
+from netmiko import ConnectHandler
+from netmiko.base_connection import BaseConnection
 
-from .constants import CommandStatus, Default, ExecMode, Field, Limits, Mark, Msg, Origin, Regex, SessionStatus, Shell, ShellCmd, Text, TransferMethod
+from .constants import CommandStatus, Default, ExecMode, Field, Limits, Msg, NetmikoKey, NetmikoValue, Origin, Prompt, Regex, SessionStatus, Shell, ShellCmd, Text, TransferMethod
 from .log import LogFactory
 from .models import CommandInfo, OutputChunk, ServerInfo, SessionView
 
@@ -53,6 +55,74 @@ class LocalPath:
         return (Path.cwd() / path).resolve()
 
 
+class NetmikoTransport:
+    def __init__(self, info: ServerInfo):
+        self.info = info
+        self.conn: BaseConnection | None = None
+
+    def params(self) -> dict:
+        return {
+            NetmikoKey.device_type: NetmikoValue.terminal,
+            NetmikoKey.host: self.info.ip,
+            NetmikoKey.port: self.info.port,
+            NetmikoKey.username: self.info.username,
+            NetmikoKey.password: self.info.password,
+            NetmikoKey.conn_timeout: Limits.connect_timeout,
+            NetmikoKey.auth_timeout: Limits.connect_timeout,
+            NetmikoKey.banner_timeout: Limits.connect_timeout,
+            NetmikoKey.blocking_timeout: Limits.blocking_timeout,
+            NetmikoKey.timeout: Limits.session_timeout,
+            NetmikoKey.session_timeout: Limits.session_timeout,
+            NetmikoKey.keepalive: Limits.keepalive,
+            NetmikoKey.allow_agent: False,
+            NetmikoKey.use_keys: False,
+            NetmikoKey.fast_cli: False,
+            NetmikoKey.encoding: Text.encoding,
+            NetmikoKey.default_enter: Shell.enter,
+        }
+
+    def conn_open(self) -> None:
+        self.conn = ConnectHandler(**self.params())
+
+    def alive(self) -> bool:
+        if not self.conn:
+            return False
+        remote = getattr(self.conn, "remote_conn", None)
+        transport = getattr(remote, "transport", None)
+        if not remote or getattr(remote, "closed", False):
+            return False
+        return bool(transport and transport.is_active())
+
+    def close(self) -> None:
+        if self.conn:
+            self.conn.disconnect()
+            self.conn = None
+
+    def write(self, text: str) -> None:
+        if not self.conn:
+            raise RuntimeError(Msg.disconnected)
+        self.conn.write_channel(text)
+
+    def read(self) -> str:
+        if not self.conn:
+            return Text.empty
+        return self.conn.read_channel()
+
+    def ssh(self) -> paramiko.SSHClient:
+        if not self.conn:
+            raise RuntimeError(Msg.disconnected)
+        client = getattr(self.conn, "remote_conn_pre", None)
+        if not client:
+            raise RuntimeError(Msg.disconnected)
+        return client
+
+    def sftp(self) -> paramiko.SFTPClient:
+        return self.ssh().open_sftp()
+
+    def exec(self, command: str):
+        return self.ssh().exec_command(command, timeout=Limits.transfer_timeout)
+
+
 class SshSession:
     def __init__(self, info: ServerInfo, origin: Origin):
         self.id = uuid.uuid4().hex
@@ -63,12 +133,12 @@ class SshSession:
         self.started_at = time.time()
         self.last_seen_at = self.started_at
         self.lock = threading.RLock()
-        self.client: paramiko.SSHClient | None = None
-        self.channel: paramiko.Channel | None = None
+        self.net: NetmikoTransport | None = None
         self.reader: threading.Thread | None = None
         self.stop = threading.Event()
         self.seq = 0
         self.tail = ""
+        self.prompt = ""
         self.chunks: list[OutputChunk] = []
         self.commands: dict[str, CommandInfo] = {}
         self.log = LogFactory.get()
@@ -76,26 +146,8 @@ class SshSession:
     def conn(self) -> dict:
         try:
             self.log.info("ssh connect start ip=%s port=%s user=%s session=%s", self.info.ip, self.info.port, self.info.username, self.id)
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(
-                self.info.ip,
-                port=self.info.port,
-                username=self.info.username,
-                password=self.info.password,
-                timeout=Limits.connect_timeout,
-                banner_timeout=Limits.connect_timeout,
-                auth_timeout=Limits.connect_timeout,
-                look_for_keys=False,
-                allow_agent=False,
-            )
-            transport = client.get_transport()
-            if transport:
-                transport.set_keepalive(Limits.keepalive)
-            channel = client.invoke_shell(width=200, height=40)
-            channel.settimeout(0.0)
-            self.client = client
-            self.channel = channel
+            self.net = NetmikoTransport(self.info)
+            self.net.conn_open()
             self.prep()
             self.status = SessionStatus.connected
             self.reader = threading.Thread(target=self.watch, daemon=True)
@@ -109,17 +161,19 @@ class SshSession:
             raise
 
     def prep(self) -> None:
-        if not self.channel:
+        if not self.net:
             return
-        self.channel.send(Shell.echo_off)
+        self.net.write(Shell.echo_off)
         time.sleep(Limits.prep_wait)
         self.drain()
+        self.net.write(Shell.enter)
+        time.sleep(Limits.prep_wait)
+        self.prompt = self.find_prompt(self.drain())
 
-    def drain(self) -> None:
-        if not self.channel:
-            return
-        while self.channel.recv_ready():
-            self.channel.recv(Limits.recv)
+    def drain(self) -> str:
+        if not self.net:
+            return Text.empty
+        return self.net.read()
 
     def view(self) -> SessionView:
         self.probe()
@@ -139,11 +193,7 @@ class SshSession:
         with self.lock:
             if self.status in (SessionStatus.closed, SessionStatus.failed, SessionStatus.disconnected):
                 return False
-            transport = self.client.get_transport() if self.client else None
-            if not transport or not transport.is_active():
-                self.mark(SessionStatus.disconnected, Msg.disconnected)
-                return False
-            if self.channel and self.channel.closed:
+            if not self.net or not self.net.alive():
                 self.mark(SessionStatus.disconnected, Msg.disconnected)
                 return False
             return True
@@ -165,10 +215,8 @@ class SshSession:
             self.stop.set()
             self.mark(SessionStatus.closed, "")
             try:
-                if self.channel:
-                    self.channel.close()
-                if self.client:
-                    self.client.close()
+                if self.net:
+                    self.net.close()
             except Exception:
                 self.log.exception("ssh close failed session=%s ip=%s", self.id, self.info.ip)
             return self.view().data()
@@ -178,10 +226,9 @@ class SshSession:
             try:
                 if not self.probe():
                     break
-                if self.channel and self.channel.recv_ready():
-                    data = self.channel.recv(Limits.recv)
-                    if data:
-                        text = data.decode(Text.encoding, errors="replace")
+                if self.net:
+                    text = self.net.read()
+                    if text:
                         self.add(text)
                         self.scan(text)
                         self.last_seen_at = time.time()
@@ -205,53 +252,52 @@ class SshSession:
     def scan(self, text: str) -> None:
         with self.lock:
             self.tail = (self.tail + text)[-Limits.tail:]
-            for cmd in self.commands.values():
-                start = f"{Mark.prefix}{cmd.command_id}{Mark.start}"
-                end = f"{Mark.prefix}{cmd.command_id}{Mark.end}"
-                if start in self.tail and cmd.status == CommandStatus.queued:
-                    cmd.status = CommandStatus.running
-                match = re.search(re.escape(end) + r":(\d+)", self.tail)
-                if match and cmd.status in (CommandStatus.queued, CommandStatus.running):
-                    cmd.status = CommandStatus.done
-                    cmd.ended_at = time.time()
-                    cmd.end_seq = self.seq
-                    cmd.exit_code = int(match.group(1))
+            cmd = self.active()
+            if cmd and self.prompted(self.tail):
+                cmd.status = CommandStatus.done
+                cmd.ended_at = time.time()
+                cmd.end_seq = self.seq
 
     def send(self, command: str, mode: ExecMode, opts: dict) -> dict:
         if not self.probe():
             raise RuntimeError(Msg.disconnected)
-        cmd = CommandInfo(command_id=uuid.uuid4().hex, command=command, start_seq=self.seq)
-        payload = self.wrap(cmd.command_id, self.target(command, mode, opts), mode)
+        target = self.target(command, mode, opts)
+        cmd = CommandInfo(command_id=uuid.uuid4().hex, command=command, sent=target, start_seq=self.seq)
+        payload = self.line(target, mode)
         with self.lock:
+            if mode != ExecMode.raw and self.active():
+                raise RuntimeError(Msg.command_running)
             self.commands[cmd.command_id] = cmd
-            if not self.channel:
+            if not self.net:
                 raise RuntimeError(Msg.disconnected)
             self.log.info("ssh exec session=%s command=%s mode=%s", self.id, cmd.command_id, mode.value)
-            channel = self.channel
-        self.write(channel, payload)
+            net = self.net
+        try:
+            self.write(net, payload)
+        except Exception as exc:
+            with self.lock:
+                cmd.status = CommandStatus.failed
+                cmd.ended_at = time.time()
+                cmd.reason = str(exc)
+            raise
         if mode == ExecMode.raw:
             with self.lock:
                 cmd.status = CommandStatus.done
                 cmd.ended_at = time.time()
                 cmd.reason = Msg.raw_sent
+        else:
+            with self.lock:
+                cmd.status = CommandStatus.running
         return cmd.data() | {Field.session_id: self.id}
 
-    def write(self, channel: paramiko.Channel, payload: str) -> None:
-        data = payload.encode(Text.encoding)
-        sent = 0
-        while sent < len(data):
-            if getattr(channel, "closed", False):
-                raise RuntimeError(Msg.disconnected)
-            if hasattr(channel, "send_ready") and not channel.send_ready():
-                time.sleep(Limits.poll)
-                continue
-            part = data[sent:sent + Limits.send]
-            count = channel.send(part)
-            if count is None:
-                count = len(part)
-            if count <= 0:
-                raise RuntimeError(Msg.disconnected)
-            sent += count
+    def active(self) -> CommandInfo | None:
+        for cmd in sorted(self.commands.values(), key=lambda item: item.started_at):
+            if cmd.status in (CommandStatus.queued, CommandStatus.running):
+                return cmd
+        return None
+
+    def write(self, net: NetmikoTransport, payload: str) -> None:
+        net.write(payload)
 
     def target(self, command: str, mode: ExecMode, opts: dict) -> str:
         if mode == ExecMode.docker:
@@ -273,17 +319,25 @@ class SshSession:
             return f"{part} -- {shlex.quote(shell)} -lc {shlex.quote(command)}"
         return command
 
-    def wrap(self, command_id: str, command: str, mode: ExecMode) -> str:
+    def line(self, command: str, mode: ExecMode) -> str:
         if mode == ExecMode.raw:
-            return f"{command}\n"
-        start = f"{Mark.prefix}{command_id}{Mark.start}"
-        end = f"{Mark.prefix}{command_id}{Mark.end}"
-        return (
-            f"printf '\\n{start}\\n'; "
-            f"( {command} ); "
-            f"__mcp_code=$?; "
-            f"printf '\\n{end}:%s\\n' \"$__mcp_code\"\n"
-        )
+            return f"{command}{Shell.enter}"
+        return f"{command.rstrip()}{Shell.enter}"
+
+    def prompted(self, text: str) -> bool:
+        clean = re.sub(Regex.ansi, Text.empty, text)
+        clean = clean.replace("\r\n", Shell.enter).replace("\r", Shell.enter)
+        if self.prompt and clean.rstrip().endswith(self.prompt.rstrip()):
+            return True
+        return bool(re.search(Prompt.pattern, clean))
+
+    def find_prompt(self, text: str) -> str:
+        clean = re.sub(Regex.ansi, Text.empty, text)
+        clean = clean.replace("\r\n", Shell.enter).replace("\r", Shell.enter)
+        lines = [line for line in clean.split(Shell.enter) if line.strip()]
+        if lines and re.search(Prompt.line, lines[-1]):
+            return lines[-1]
+        return Text.empty
 
     def output(self, command_id: str | None, cursor: int, limit: int) -> dict:
         with self.lock:
@@ -317,18 +371,29 @@ class SshSession:
             }
 
     def clean(self, text: str, cmd: CommandInfo | None = None) -> str:
-        if cmd:
-            start = f"{Mark.prefix}{cmd.command_id}{Mark.start}"
-            end = f"{Mark.prefix}{cmd.command_id}{Mark.end}"
-            if start in text:
-                text = text.split(start, 1)[1]
-            match = re.search(re.escape(end) + r":\d+", text)
-            if match:
-                text = text[:match.start()]
-        text = re.sub(Regex.start, "", text)
-        text = re.sub(Regex.end, "", text)
         text = re.sub(Regex.ansi, "", text)
+        if cmd:
+            text = self.strip_echo(text, cmd.sent or cmd.command)
+            text = self.strip_prompt(text)
         return text.strip("\r\n")
+
+    def strip_echo(self, text: str, command: str) -> str:
+        lines = text.splitlines()
+        if lines and lines[0].strip() == command.strip():
+            return Shell.enter.join(lines[1:])
+        return text
+
+    def strip_prompt(self, text: str) -> str:
+        if self.prompt:
+            prompt = self.prompt.rstrip()
+            if text.rstrip().endswith(prompt):
+                return text[:text.rfind(prompt)].rstrip("\r\n")
+        lines = text.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if lines and re.search(Prompt.line, lines[-1]):
+            lines.pop()
+        return Shell.enter.join(lines)
 
     def cmd(self, command_id: str) -> dict:
         with self.lock:
@@ -337,10 +402,11 @@ class SshSession:
             return self.commands[command_id].data() | {Field.session_id: self.id}
 
     def sftp(self) -> paramiko.SFTPClient:
-        if not self.probe() or not self.client:
+        if not self.probe() or not self.net:
             raise RuntimeError(Msg.disconnected)
-        sftp = self.client.open_sftp()
-        self.no_timeout(sftp.get_channel())
+        sftp = self.net.sftp()
+        channel = sftp.get_channel()
+        channel.settimeout(Limits.transfer_timeout)
         return sftp
 
     def no_timeout(self, *items) -> None:
@@ -360,10 +426,10 @@ class SshSession:
         return path.stat().st_size
 
     def run(self, command: str, data: bytes | None = None) -> bytes:
-        if not self.probe() or not self.client:
+        if not self.probe() or not self.net:
             raise RuntimeError(Msg.disconnected)
         self.log.info("ssh shell transfer command session=%s ip=%s command=%s", self.id, self.info.ip, command)
-        stdin, stdout, stderr = self.client.exec_command(command, timeout=Limits.transfer_timeout)
+        stdin, stdout, stderr = self.net.exec(command)
         self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
         if data is not None:
             stdin.write(data)
@@ -376,11 +442,11 @@ class SshSession:
         return out
 
     def once(self, command: str, mode: ExecMode, opts: dict) -> dict:
-        if not self.probe() or not self.client:
+        if not self.probe() or not self.net:
             raise RuntimeError(Msg.disconnected)
         target = self.target(command, mode, opts)
         self.log.info("ssh once command session=%s ip=%s mode=%s", self.id, self.info.ip, mode.value)
-        stdin, stdout, stderr = self.client.exec_command(target, timeout=Limits.transfer_timeout)
+        stdin, stdout, stderr = self.net.exec(target)
         self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
         out = stdout.read().decode(Text.encoding, errors="replace")
         err = stderr.read().decode(Text.encoding, errors="replace")
@@ -399,10 +465,10 @@ class SshSession:
         }
 
     def run_file(self, command: str, local_path: str) -> int:
-        if not self.probe() or not self.client:
+        if not self.probe() or not self.net:
             raise RuntimeError(Msg.disconnected)
         self.log.info("ssh shell transfer file session=%s ip=%s command=%s local=%s", self.id, self.info.ip, command, local_path)
-        stdin, stdout, stderr = self.client.exec_command(command, timeout=Limits.transfer_timeout)
+        stdin, stdout, stderr = self.net.exec(command)
         self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
         size = 0
         with Path(local_path).open("rb") as file:
@@ -432,10 +498,10 @@ class SshSession:
         path = Path(local_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         command = f"{ShellCmd.cat} {shlex.quote(remote_path)}"
-        if not self.probe() or not self.client:
+        if not self.probe() or not self.net:
             raise RuntimeError(Msg.disconnected)
         self.log.info("ssh shell download stream session=%s ip=%s command=%s local=%s", self.id, self.info.ip, command, local_path)
-        stdin, stdout, stderr = self.client.exec_command(command, timeout=Limits.transfer_timeout)
+        stdin, stdout, stderr = self.net.exec(command)
         self.no_timeout(getattr(stdin, "channel", None), getattr(stdout, "channel", None), getattr(stderr, "channel", None))
         stdin.close()
         size = 0

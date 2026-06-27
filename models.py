@@ -56,6 +56,7 @@ class OutputChunk:
 class CommandInfo:
     command_id: str
     command: str
+    sent: str = ""
     status: CommandStatus = CommandStatus.queued
     start_seq: int = 0
     end_seq: int | None = None

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import socket
 import sys
 import tempfile
@@ -25,6 +24,7 @@ class EnvTest:
     value = "env_kept_20260626"
     timeout = 5
     poll = 0.05
+    prompt = "test-shell$ "
 
 
 class TestSshServer(paramiko.ServerInterface):
@@ -109,21 +109,15 @@ class LocalSshServer:
                 self.reply(chan, line.strip("\r"))
 
     def reply(self, chan, line):
-        if not line or line.startswith("stty "):
+        if line.startswith("stty "):
             return
-        start = re.search(r"(__MCP_CMD_[0-9a-f]+_START__)", line)
-        end = re.search(r"(__MCP_CMD_[0-9a-f]+_END__)", line)
-        body = re.search(r"; \( (.*?) \); __mcp_code=", line)
-        out = ""
-        code = 0
-        if body:
-            out, code = self.exec(body.group(1).strip())
-        if start:
-            chan.send("\n" + start.group(1) + "\n")
+        if not line:
+            chan.send(EnvTest.prompt)
+            return
+        out, _ = self.exec(line.strip())
         if out:
             chan.send(out)
-        if end:
-            chan.send("\n" + end.group(1) + f":{code}\n")
+        chan.send(EnvTest.prompt)
 
     def exec(self, cmd):
         if cmd.startswith("export "):
@@ -201,7 +195,7 @@ class McpClient:
                 })
                 if data.get(Field.output):
                     parts.append(data[Field.output])
-                return int(cmd[Field.exit_code]), "".join(parts)
+                return cmd[Field.exit_code], "".join(parts)
             time.sleep(EnvTest.poll)
         raise TimeoutError(cid)
 
@@ -222,7 +216,7 @@ class Main:
             read_code, output = client.send(sid, f'printf "${EnvTest.key}"')
             if sid:
                 client.close_session(sid)
-            kept = export_code == 0 and read_code == 0 and output == EnvTest.value
+            kept = output == EnvTest.value
             print({
                 Field.session_id: sid,
                 "export_exit": export_code,

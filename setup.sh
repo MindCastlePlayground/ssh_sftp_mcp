@@ -34,15 +34,15 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-# --- 2. 安装 paramiko ---
-echo -e "${YELLOW}[2/5] 安装 paramiko 依赖...${NC}"
-if "$PYTHON" -m pip install paramiko --quiet 2>/dev/null; then
-    echo -e "  ${GREEN}[OK] paramiko 已安装${NC}"
+# --- 2. 安装 netmiko ---
+echo -e "${YELLOW}[2/5] 安装 netmiko 依赖...${NC}"
+if "$PYTHON" -m pip install netmiko --quiet 2>/dev/null; then
+    echo -e "  ${GREEN}[OK] netmiko 已安装${NC}"
 else
     # 如果用户环境需要 --user
     echo -e "  ${YELLOW}尝试用户级安装...${NC}"
-    "$PYTHON" -m pip install --user paramiko --quiet
-    echo -e "  ${GREEN}[OK] paramiko 已安装 (user)${NC}"
+    "$PYTHON" -m pip install --user netmiko --quiet
+    echo -e "  ${GREEN}[OK] netmiko 已安装 (user)${NC}"
 fi
 
 # --- 3. 确定路径 ---
