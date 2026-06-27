@@ -26,9 +26,28 @@ pip install paramiko
 
 ## 运行
 
+默认启动 MCP stdio 门面。门面会在第一次工具调用时连接本地服务；如果服务未运行，会自动启动独立服务进程：
+
 ```powershell
 python -m ssh_sftp_mcp
 ```
+
+也可以先单独启动服务进程，再启动 MCP 门面：
+
+```powershell
+python -m ssh_sftp_mcp --service
+```
+
+服务默认监听 `127.0.0.1:8765`。可通过环境变量调整：
+
+| 环境变量 | 说明 |
+|----------|------|
+| `SSH_SFTP_MCP_SERVICE_HOST` | 服务监听地址，默认 `127.0.0.1` |
+| `SSH_SFTP_MCP_SERVICE_PORT` | 服务监听端口，默认 `8765` |
+| `SSH_SFTP_MCP_SERVICE_START` | MCP 门面是否自动启动服务，`0` / `false` / `off` 表示禁用 |
+| `SSH_SFTP_MCP_PYTHON` | 自动启动服务时使用的 Python 可执行文件，默认当前解释器 |
+
+MCP stdio 进程只保留协议门面和工具目录；SSH/SFTP 会话、注册表访问和热加载业务逻辑运行在独立服务进程中。服务进程崩溃时，MCP 连接不会因此断开；下一次工具调用会返回服务不可用错误，并在允许自动启动时尝试重新拉起服务。
 
 ## MCP 客户端配置
 
@@ -169,6 +188,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-repo>/main/setup.sh)
 | `sftp_upload(ip, local_path, remote_path, session_id?)` | SFTP 上传文件 |
 | `sftp_download(ip, remote_path, local_path, session_id?)` | SFTP 下载文件 |
 | `ssh_list_servers()` | 列出已注册服务器（不含密码） |
+| `service_start()` | 启动或确认本地 SSH/SFTP 后端服务进程 |
+| `service_version()` | 返回当前后端服务热加载版本信息 |
 
 ## 注册表同步
 

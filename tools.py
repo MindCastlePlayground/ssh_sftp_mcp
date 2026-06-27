@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
 
-from .constants import Default, ExecMode, Field, JsonKey, ServiceEntry, ServiceFile, ServiceName, RpcValue, Tool, ToolDesc
+from .constants import Default, ExecMode, Field, JsonKey, Msg, ServiceEntry, ServiceFile, ServiceName, RpcValue, Tool, ToolDesc
 from .log import LogFactory
 from .service_host import ServiceHost, ServiceSpec
+from .service_client import ToolClient
 from .session import SessionManager
 from .store import ServerStore
 
@@ -133,10 +134,22 @@ class ToolCatalog:
             }, [Field.ip, Field.remote_path, Field.local_path])),
             cls.item(Tool.servers, ToolDesc.servers, Schemas.obj({}, [])),
             cls.item(Tool.version, ToolDesc.version, Schemas.obj({}, [])),
+            cls.item(Tool.service_start, ToolDesc.service_start, Schemas.obj({}, [])),
         ]
 
 
-class ToolFacade:
+class ToolResult:
+    @staticmethod
+    def make(data: dict | list, is_error: bool) -> dict:
+        text = json.dumps(data, ensure_ascii=False, indent=2)
+        return {
+            JsonKey.content: [{JsonKey.type: RpcValue.text, JsonKey.text: text}],
+            JsonKey.structured: data if isinstance(data, dict) else {JsonKey.items: data},
+            JsonKey.is_error: is_error,
+        }
+
+
+class ToolService:
     def __init__(self, manager: SessionManager):
         self.manager = manager
         self.host = ServiceHost(ServiceSpec(
@@ -157,24 +170,43 @@ class ToolFacade:
             return self.result({Field.reason: str(exc)}, True)
 
     def route(self, name: str, args: dict) -> dict | list:
+        if name == Tool.service_start:
+            return {Field.status: Msg.ok}
         if name == Tool.version:
             return self.host.info()
         return self.host.api(self.manager).route(name, args)
 
     def result(self, data: dict | list, is_error: bool) -> dict:
-        text = json.dumps(data, ensure_ascii=False, indent=2)
-        return {
-            JsonKey.content: [{JsonKey.type: RpcValue.text, JsonKey.text: text}],
-            JsonKey.structured: data if isinstance(data, dict) else {JsonKey.items: data},
-            JsonKey.is_error: is_error,
-        }
+        return ToolResult.make(data, is_error)
 
 
-class ToolService(ToolFacade):
-    pass
+class ToolFacade:
+    def __init__(self, client: ToolClient | None = None):
+        self.client = client or ToolClient()
+        self.log = LogFactory.get()
+
+    def call(self, name: str, args: dict) -> dict:
+        try:
+            self.log.info("facade call start name=%s", name)
+            if name == Tool.service_start:
+                data = ToolResult.make(self.client.start(), False)
+            else:
+                data = self.client.call(name, args or {})
+            self.log.info("facade call ok name=%s", name)
+            return data
+        except Exception as exc:
+            self.log.exception("facade call failed name=%s", name)
+            return self.result({Field.reason: str(exc)}, True)
+
+    def result(self, data: dict | list, is_error: bool) -> dict:
+        return ToolResult.make(data, is_error)
 
 
 class ToolFactory:
     @staticmethod
     def make() -> ToolFacade:
-        return ToolFacade(SessionManager(ServerStore()))
+        return ToolFacade()
+
+    @staticmethod
+    def make_local() -> ToolService:
+        return ToolService(SessionManager(ServerStore()))

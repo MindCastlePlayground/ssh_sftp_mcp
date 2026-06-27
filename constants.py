@@ -38,6 +38,40 @@ class ServiceError:
 
 class Env:
     home = "SSH_SFTP_MCP_HOME"
+    service_host = "SSH_SFTP_MCP_SERVICE_HOST"
+    service_port = "SSH_SFTP_MCP_SERVICE_PORT"
+    service_start = "SSH_SFTP_MCP_SERVICE_START"
+    python = "SSH_SFTP_MCP_PYTHON"
+    pythonpath = "PYTHONPATH"
+
+
+class Arg:
+    service = "--service"
+
+
+class ModuleName:
+    package = "ssh_sftp_mcp"
+
+
+class ServiceDefault:
+    host = "127.0.0.1"
+    port = 8765
+    wait = 5.0
+    connect_timeout = 1.0
+    retry_sleep = 0.05
+    backlog = 16
+    recv = 1048576
+
+
+class ServiceCmd:
+    ping = "ping"
+    call = "call"
+
+
+class EnvValue:
+    false = "0"
+    no = "false"
+    off = "off"
 
 
 class Default:
@@ -155,6 +189,7 @@ class Field:
     bytes = "bytes"
     path = "path"
     old_ip = "old_ip"
+    host = "host"
     fallback = "fallback"
     method = "method"
     service = "service"
@@ -184,6 +219,7 @@ class Tool:
     download = "sftp_download"
     servers = "ssh_list_servers"
     version = "service_version"
+    service_start = "service_start"
 
 
 class ToolDesc:
@@ -202,6 +238,7 @@ class ToolDesc:
     download = "Download a remote file from a server with SFTP."
     servers = "List registered SSH servers without passwords."
     version = "Return the current hot-reload service version timestamp."
+    service_start = "Start or verify the local SSH/SFTP backend service process."
 
 
 class Msg:
@@ -224,6 +261,8 @@ class Msg:
     stdio_eof = "stdio input closed"
     stdio_closed = "stdio output closed"
     server_failed = "mcp server stopped unexpectedly"
+    service_down = "service process is unavailable"
+    service_bad_cmd = "unknown service command"
     bad_batch = "invalid batch items"
     batch_too_large = "batch item limit exceeded"
     raw_sent = "raw input sent; completion is not tracked"

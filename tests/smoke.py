@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import sys
 import tempfile
 import threading
@@ -7,13 +8,14 @@ import time
 import unittest
 from pathlib import Path
 
-from ssh_sftp_mcp.constants import CommandStatus, ExecMode, Field, JsonKey, Limits, Msg, Origin, RpcError, RpcMethod, RpcValue, ServiceFile, ServiceName, SessionStatus, Text, Tool, TransferMethod
+from ssh_sftp_mcp.constants import CommandStatus, ExecMode, Field, JsonKey, Limits, Msg, Origin, RpcError, RpcMethod, RpcValue, ServiceCmd, ServiceFile, ServiceName, SessionStatus, Text, Tool, TransferMethod
 from ssh_sftp_mcp.models import CommandInfo, ServerInfo
 from ssh_sftp_mcp.rpc import McpServer, StdioApp, StdioClosed
+from ssh_sftp_mcp.service_client import ServiceConfig, ServiceWire, ToolClient
 from ssh_sftp_mcp.service_host import ServiceHost, ServiceSpec
 from ssh_sftp_mcp.session import SessionManager, SshSession
 from ssh_sftp_mcp.store import ServerStore
-from ssh_sftp_mcp.tools import ToolCatalog, ToolService
+from ssh_sftp_mcp.tools import ToolCatalog, ToolFacade, ToolService
 
 
 class SmokeTest(unittest.TestCase):
@@ -32,6 +34,7 @@ class SmokeTest(unittest.TestCase):
         self.assertIn(Tool.upload, names)
         self.assertIn(Tool.download, names)
         self.assertIn(Tool.version, names)
+        self.assertIn(Tool.service_start, names)
 
     def test_catalog_guides_interactive_session_ids(self):
         items = {item[JsonKey.name]: item for item in ToolCatalog.list()}
@@ -164,6 +167,102 @@ class SmokeTest(unittest.TestCase):
             path.write_text("class Api:\n    def value(self):\n        return 'v2'\n", encoding=Text.encoding)
             third = host.info()
             self.assertNotEqual(third[Field.loaded_version], third[Field.version])
+
+    def test_tool_client_calls_ready_before_service_request(self):
+        class Proc:
+            def __init__(self):
+                self.ready_count = 0
+
+            def ready(self):
+                self.ready_count += 1
+
+        class Client(ToolClient):
+            def __init__(self, proc):
+                super().__init__(ServiceConfig(start=False), proc)
+                self.req = {}
+
+            def send(self, req):
+                self.req = req
+                return {
+                    Field.ok: True,
+                    JsonKey.result: {
+                        JsonKey.content: [],
+                        JsonKey.structured: {Field.ok: True},
+                        JsonKey.is_error: False,
+                    },
+                }
+
+        proc = Proc()
+        client = Client(proc)
+        res = client.call(Tool.servers, {})
+        self.assertEqual(proc.ready_count, 1)
+        self.assertEqual(client.req[Field.command], ServiceCmd.call)
+        self.assertEqual(client.req[JsonKey.name], Tool.servers)
+        self.assertFalse(res[JsonKey.is_error])
+
+    def test_service_wire_waits_for_long_tool_response(self):
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve():
+            try:
+                conn, _ = server.accept()
+                with conn:
+                    conn.recv(4096)
+                    time.sleep(1.2)
+                    conn.sendall(json.dumps({
+                        Field.ok: True,
+                        JsonKey.result: {Field.status: Msg.ok},
+                    }).encode(Text.encoding) + b"\n")
+            finally:
+                server.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        res = ServiceWire.ask(ServiceConfig(port=port, start=False), {Field.command: ServiceCmd.ping})
+        thread.join(timeout=2)
+        self.assertTrue(res[Field.ok])
+        self.assertEqual(res[JsonKey.result][Field.status], Msg.ok)
+
+    def test_facade_service_start_is_local_tool(self):
+        class Client:
+            def __init__(self):
+                self.called = False
+
+            def start(self):
+                return {Field.status: Msg.ok, Field.host: "127.0.0.1", Field.port: 9}
+
+            def call(self, name, args):
+                self.called = True
+                raise AssertionError("service_start should not route to backend call")
+
+        client = Client()
+        res = ToolFacade(client).call(Tool.service_start, {})
+        self.assertFalse(res[JsonKey.is_error])
+        self.assertEqual(res[JsonKey.structured][Field.status], Msg.ok)
+        self.assertFalse(client.called)
+
+    def test_facade_service_failure_stays_tool_error(self):
+        class Client:
+            def call(self, name, args):
+                raise ConnectionError("service exited")
+
+        service = ToolFacade(Client())
+        server = McpServer(service)
+        res = server.handle({
+            JsonKey.jsonrpc: RpcValue.version,
+            JsonKey.id: 7,
+            JsonKey.method: RpcMethod.tools_call,
+            JsonKey.params: {JsonKey.name: Tool.servers, JsonKey.arguments: {}},
+        })
+        result = res[JsonKey.result]
+        self.assertTrue(result[JsonKey.is_error])
+        self.assertIn("service exited", result[JsonKey.structured][Field.reason])
+        ping = server.handle({JsonKey.jsonrpc: RpcValue.version, JsonKey.id: 8, JsonKey.method: RpcMethod.ping})
+        self.assertEqual(ping[JsonKey.result], {})
 
     def test_exec_many_runs_items_concurrently(self):
         class Manager:
