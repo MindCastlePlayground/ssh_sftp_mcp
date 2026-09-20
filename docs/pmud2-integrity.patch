@@ -1,0 +1,543 @@
+--- a/sftp_tool.py
++++ b/sftp_tool.py
+@@ -15 +15 @@
+-import tempfile
++import uuid
+@@ -42,0 +43,23 @@
++
++
++async def _gather(tasks):
++    running = [asyncio.create_task(task) for task in tasks]
++    try:
++        return await asyncio.gather(*running)
++    except BaseException:
++        for task in running:
++            task.cancel()
++        await asyncio.gather(*running, return_exceptions=True)
++        raise
++
++
++async def _read_full(handle, size, offset):
++    parts = []
++    done = 0
++    while done < size:
++        data = await handle.read(size - done, offset=offset + done)
++        if not data or len(data) > size - done:
++            raise RuntimeError(f'远程读取提前结束: offset={offset}, 剩余 {size - done} bytes')
++        parts.append(data)
++        done += len(data)
++    return b''.join(parts)
+@@ -90,0 +114,23 @@
++class TransferIntegrity:
++    def __init__(self, params):
++        self.params = params
++
++    async def digest(self, remote, size, algorithm):
++        sha = hashlib.sha256()
++        selected = hashlib.new(algorithm)
++        async with asyncssh.connect(**self.params) as conn:
++            async with conn.start_sftp_client() as sftp:
++                before = await sftp.stat(remote)
++                if before.size != size:
++                    raise RuntimeError('远端文件大小验证失败')
++                async with sftp.open(remote, 'rb') as handle:
++                    for offset in range(0, size, CHUNK_SIZE):
++                        data = await _read_full(handle, min(CHUNK_SIZE, size - offset), offset)
++                        sha.update(data)
++                        selected.update(data)
++                after = await sftp.stat(remote)
++                if (after.size, after.mtime) != (before.size, before.mtime):
++                    raise RuntimeError('远端文件在校验期间发生变化')
++        return sha.hexdigest(), selected.hexdigest()
++
++
+@@ -107 +152,0 @@
+-                    await file_handle.seek(offset)
+@@ -114,3 +159,5 @@
+-                            if not data:
+-                                break
+-                            await file_handle.write(data)
++                            if len(data) != write_size:
++                                raise RuntimeError(f'本地读取提前结束: offset={offset}, 剩余 {remaining} bytes')
++                            written = await file_handle.write(data, offset=offset + part_size - remaining)
++                            if written != len(data):
++                                raise RuntimeError(f'远程写入不完整: offset={offset}, 写入 {written}/{len(data)} bytes')
+@@ -118,4 +164,0 @@
+-                    if remaining > 0:
+-                        raise RuntimeError(
+-                            f"上传不完整: offset={offset}, 剩余 {remaining} bytes"
+-                        )
+@@ -143,4 +186,4 @@
+-        """创建远程文件并预分配大小，供并行 r+b 写入"""
+-        async with asyncssh.connect(**self.conn_params) as conn:
+-            async with conn.start_sftp_client() as sftp:
+-                async with sftp.open(remote_path, 'wb') as file_handle:
++        """Create staging once; range writes extend it without trusting preallocated length."""
++        async with asyncssh.connect(**self.conn_params) as conn:
++            async with conn.start_sftp_client() as sftp:
++                async with sftp.open(remote_path, 'xb'):
+@@ -148,47 +191,7 @@
+-                if file_size > 0:
+-                    try:
+-                        await sftp.truncate(remote_path, file_size)
+-                    except (asyncssh.SFTPError, AttributeError):
+-                        # 部分服务器不支持 truncate；按偏移写入时会自动扩展
+-                        pass
+-
+-    async def _verify_remote_size(self, remote_file, expected_size):
+-        """验证远程文件大小"""
+-        async with asyncssh.connect(**self.conn_params) as conn:
+-            async with conn.start_sftp_client() as sftp:
+-                stat = await sftp.stat(remote_file)
+-                return stat.size == expected_size
+-
+-    async def _download_for_hash_verification(self, remote_file, local_check_file, algorithm='md5'):
+-        """下载远程文件用于哈希验证"""
+-        async with asyncssh.connect(**self.conn_params) as conn:
+-            async with conn.start_sftp_client() as sftp:
+-                await sftp.get(remote_file, local_check_file)
+-        return FileHasher.calculate(local_check_file, algorithm)
+-
+-    async def upload_async(
+-        self,
+-        local_file,
+-        remote_file,
+-        num_parallel,
+-        remote_relative_dir=None,
+-        verify=False,
+-        hash_algorithm='md5',
+-    ):
+-        """
+-        执行并行上传（异步版本）
+-
+-        Args:
+-            local_file: 本地文件路径
+-            remote_file: 远程文件路径
+-            num_parallel: 并行连接数
+-            remote_relative_dir: 远程目录（可选，用于创建目录）
+-            verify: 是否验证哈希
+-            hash_algorithm: 哈希算法
+-
+-        Returns:
+-            dict: 包含 elapsed, speed, local_hash 等信息
+-        """
+-        file_size = os.path.getsize(local_file)
+-        num_parallel = clamp_concurrency(file_size, num_parallel)
+-
++
++    async def upload_async(self, local_file, remote_file, num_parallel,
++                           remote_relative_dir=None, verify=True, hash_algorithm='md5'):
++        """Upload atomically. verify is retained for compatibility; SHA256 is mandatory."""
++        stamp = os.stat(local_file)
++        size = stamp.st_size
++        num_parallel = clamp_concurrency(size, num_parallel)
+@@ -197,2 +199,0 @@
+-
+-        await self._prepare_remote_file(remote_file, file_size)
+@@ -200,40 +201,51 @@
+-
+-        start_time = time.time()
+-        if file_size > 0:
+-            part_size = file_size // num_parallel
+-            tasks = []
+-            for i in range(num_parallel):
+-                offset = i * part_size
+-                remaining = part_size if i < num_parallel - 1 else file_size - offset
+-                tasks.append(self._upload_part(local_file, remote_file, offset, remaining))
+-            await asyncio.gather(*tasks)
+-        elapsed = max(time.time() - start_time, 1e-9)
+-        speed = file_size / 1024 / 1024 / elapsed
+-
+-        size_ok = await self._verify_remote_size(remote_file, file_size)
+-        if not size_ok:
+-            raise RuntimeError("文件大小验证失败")
+-
+-        result = {
+-            'elapsed': elapsed,
+-            'speed': speed,
+-            'local_hash': local_hash,
+-            'file_size': file_size,
+-            'concurrency': num_parallel,
+-            'verify_passed': None,
+-        }
+-
+-        if verify:
+-            fd, verify_file = tempfile.mkstemp(prefix='.sftp_verify_', suffix='.tmp')
+-            os.close(fd)
+-            try:
+-                remote_hash = await self._download_for_hash_verification(
+-                    remote_file, verify_file, hash_algorithm
+-                )
+-                result['remote_hash'] = remote_hash
+-                result['verify_passed'] = local_hash == remote_hash
+-            finally:
+-                if os.path.exists(verify_file):
+-                    os.remove(verify_file)
+-
+-        return result
++        local_sha256 = FileHasher.calculate(local_file, 'sha256')
++        staged = f'{remote_file}.part-{uuid.uuid4().hex}'
++        created = False
++        try:
++            await self._prepare_remote_file(staged, size)
++            created = True
++            start = time.perf_counter()
++            if size:
++                part_size = size // num_parallel
++                await _gather([
++                    self._upload_part(local_file, staged, i * part_size,
++                                      part_size if i < num_parallel - 1 else size - i * part_size)
++                    for i in range(num_parallel)
++                ])
++            elapsed = max(time.perf_counter() - start, 1e-9)
++            remote_sha256, remote_hash = await TransferIntegrity(self.conn_params).digest(staged, size, hash_algorithm)
++            current = os.stat(local_file)
++            if (current.st_size, current.st_mtime_ns) != (size, stamp.st_mtime_ns):
++                raise RuntimeError('本地文件在上传期间发生变化')
++            if remote_sha256 != local_sha256:
++                raise RuntimeError('哈希验证失败')
++            await self._publish_remote(staged, remote_file)
++            created = False
++            return {
++                'elapsed': elapsed, 'speed': size / 1024 / 1024 / elapsed,
++                'local_hash': local_hash, 'remote_hash': remote_hash,
++                'file_size': size, 'concurrency': num_parallel, 'verify_passed': True,
++                'local_sha256': local_sha256, 'remote_sha256': remote_sha256,
++            }
++        finally:
++            if created:
++                try:
++                    await self._remove_remote(staged)
++                except (asyncssh.Error, OSError):
++                    pass
++
++    async def _remove_remote(self, remote_file):
++        async with asyncssh.connect(**self.conn_params) as conn:
++            async with conn.start_sftp_client() as sftp:
++                try:
++                    await sftp.remove(remote_file)
++                except asyncssh.SFTPError:
++                    pass
++
++    async def _publish_remote(self, staged, remote_file):
++        async with asyncssh.connect(**self.conn_params) as conn:
++            async with conn.start_sftp_client() as sftp:
++                try:
++                    await sftp.posix_rename(staged, remote_file)
++                except asyncssh.SFTPOpUnsupported:
++                    await sftp.rename(staged, remote_file)
+@@ -247 +259 @@
+-        verify=False,
++        verify=True,
+@@ -279 +290,0 @@
+-                    await file_handle.seek(offset)
+@@ -285,4 +296,4 @@
+-                            data = await file_handle.read(read_size)
+-                            if not data:
+-                                break
+-                            f.write(data)
++                            data = await _read_full(file_handle, read_size, offset + part_size - remaining)
++                            written = f.write(data)
++                            if written != len(data):
++                                raise RuntimeError(f'本地写入不完整: offset={offset}, 写入 {written}/{len(data)} bytes')
+@@ -290,4 +300,0 @@
+-                    if remaining > 0:
+-                        raise RuntimeError(
+-                            f"下载不完整: offset={offset}, 剩余 {remaining} bytes"
+-                        )
+@@ -302,25 +309,12 @@
+-    async def download_async(
+-        self,
+-        remote_file,
+-        local_file,
+-        file_size,
+-        num_parallel,
+-        verify=False,
+-        hash_algorithm='md5',
+-        remote_hash=None,
+-    ):
+-        """
+-        执行并行下载（异步版本）
+-
+-        Args:
+-            remote_file: 远程文件路径
+-            local_file: 本地文件路径
+-            file_size: 远程文件大小
+-            num_parallel: 并行连接数
+-            verify: 是否验证哈希
+-            hash_algorithm: 哈希算法
+-            remote_hash: 远程文件哈希值（用于验证）
+-
+-        Returns:
+-            dict: 包含 elapsed, speed, local_hash 等信息
+-        """
++    async def _get_remote_stat(self, remote_file):
++        async with asyncssh.connect(**self.conn_params) as conn:
++            async with conn.start_sftp_client() as sftp:
++                stat = await sftp.stat(remote_file)
++                return stat.size, getattr(stat, 'mtime', None)
++
++    async def download_async(self, remote_file, local_file, file_size, num_parallel,
++                             verify=True, hash_algorithm='md5', remote_hash=None):
++        """Download into staging and validate before replacing any existing target."""
++        initial = await self._get_remote_stat(remote_file)
++        if initial[0] != file_size:
++            raise RuntimeError('远程文件大小已变化')
+@@ -328,31 +322,34 @@
+-
+-        with open(local_file, 'wb') as f:
+-            f.truncate(file_size)
+-
+-        start_time = time.time()
+-        if file_size > 0:
+-            part_size = file_size // num_parallel
+-            tasks = []
+-            for i in range(num_parallel):
+-                offset = i * part_size
+-                remaining = part_size if i < num_parallel - 1 else file_size - offset
+-                tasks.append(self._download_part(remote_file, local_file, offset, remaining))
+-            await asyncio.gather(*tasks)
+-        elapsed = max(time.time() - start_time, 1e-9)
+-        speed = file_size / 1024 / 1024 / elapsed
+-
+-        result = {
+-            'elapsed': elapsed,
+-            'speed': speed,
+-            'file_size': file_size,
+-            'concurrency': num_parallel,
+-            'verify_passed': None,
+-        }
+-
+-        if verify:
+-            local_hash = FileHasher.calculate(local_file, hash_algorithm)
+-            result['local_hash'] = local_hash
+-            if remote_hash:
+-                result['verify_passed'] = local_hash == remote_hash
+-
+-        return result
++        staged = f'{local_file}.part-{uuid.uuid4().hex}'
++        created = False
++        try:
++            with open(staged, 'xb'):
++                created = True
++            start = time.perf_counter()
++            if file_size:
++                part_size = file_size // num_parallel
++                await _gather([
++                    self._download_part(remote_file, staged, i * part_size,
++                                        part_size if i < num_parallel - 1 else file_size - i * part_size)
++                    for i in range(num_parallel)
++                ])
++            elapsed = max(time.perf_counter() - start, 1e-9)
++            if os.path.getsize(staged) != file_size:
++                raise RuntimeError('下载文件大小验证失败')
++            local_hash = FileHasher.calculate(staged, hash_algorithm)
++            local_sha256 = FileHasher.calculate(staged, 'sha256')
++            remote_sha256, actual = await TransferIntegrity(self.conn_params).digest(remote_file, file_size, hash_algorithm)
++            if remote_sha256 != local_sha256 or (remote_hash is not None and local_hash.lower() != remote_hash.lower()):
++                raise RuntimeError('哈希验证失败')
++            if await self._get_remote_stat(remote_file) != initial:
++                raise RuntimeError('远程文件在下载期间发生变化')
++            os.replace(staged, local_file)
++            created = False
++            return {
++                'elapsed': elapsed, 'speed': file_size / 1024 / 1024 / elapsed,
++                'file_size': file_size, 'concurrency': num_parallel,
++                'verify_passed': True, 'local_hash': local_hash, 'remote_hash': actual,
++                'local_sha256': local_sha256, 'remote_sha256': remote_sha256,
++            }
++        finally:
++            if created and os.path.exists(staged):
++                os.remove(staged)
+@@ -366 +363 @@
+-        verify=False,
++        verify=True,
+@@ -467 +464 @@
+-    print("上传成功!")
++    print("上传成功! SHA256 校验通过。")
+@@ -522 +519 @@
+-    print("\n[2/5] 预分配本地文件空间...")
++    print("\n[2/5] 准备本地临时文件...")
+@@ -539,5 +535,0 @@
+-        if os.path.exists(local_file):
+-            try:
+-                os.remove(local_file)
+-            except OSError:
+-                pass
+@@ -572 +564 @@
+-    print("下载成功!")
++    print("下载成功! SHA256 校验通过。")
+@@ -616 +608 @@
+-        help='哈希算法 (默认: md5)',
++        help='显示及 remote-hash 的算法 (默认 md5；完整性始终使用 SHA256)',
+@@ -647 +639 @@
+-    parser_upload.add_argument('-v', '--verify', action='store_true', help='下载验证哈希')
++    parser_upload.add_argument('-v', '--verify', action='store_true', help='兼容选项；始终执行 SHA256 校验')
+@@ -657 +649 @@
+-    parser_download.add_argument('-v', '--verify', action='store_true', help='下载完成后验证哈希')
++    parser_download.add_argument('-v', '--verify', action='store_true', help='兼容选项；始终执行 SHA256 校验')
+--- /dev/null
++++ b/tests/test_sftp_integrity.py
+@@ -0,0 +1,162 @@
++import asyncio
++import importlib.util
++from importlib.machinery import SourceFileLoader
++import os
++import tempfile
++import unittest
++from pathlib import Path
++
++import asyncssh
++
++
++ROOT = Path(__file__).parents[1]
++SPEC = importlib.util.spec_from_file_location("pmud2_candidate", ROOT / "sftp_tool.py")
++CANDIDATE = importlib.util.module_from_spec(SPEC)
++SPEC.loader.exec_module(CANDIDATE)
++
++
++class FaultSFTP(asyncssh.SFTPServer):
++    def __init__(self, chan, root, state):
++        super().__init__(chan, chroot=os.fsencode(root))
++        self.state = state
++
++    async def read(self, file_obj, offset, length):
++        file_obj.seek(offset)
++        data = file_obj.read(length)
++        if self.state.get("short") and len(data) > 1:
++            return data[:max(1, min(8191, len(data)))]
++        return data
++
++    async def write(self, file_obj, offset, data):
++        if self.state.get("fail") and offset == 0:
++            raise asyncssh.SFTPFailure("injected write failure")
++        if self.state.get("corrupt") and offset == 0 and data:
++            return len(data)  # Acknowledge but drop the first range, leaving a same-size hole.
++        file_obj.seek(offset)
++        file_obj.write(data)
++        return len(data)
++
++
++class NoAuth(asyncssh.SSHServer):
++    def begin_auth(self, username):
++        return False
++
++
++class Fixture:
++    def __init__(self):
++        self.tmp = tempfile.TemporaryDirectory(prefix="pmud2-sftp-")
++        self.root = Path(self.tmp.name)
++        self.state = {}
++        self.key = asyncssh.generate_private_key("ssh-rsa")
++        self.listener = None
++
++    async def start(self):
++        self.listener = await asyncssh.listen(
++            "127.0.0.1", 0, server_factory=NoAuth,
++            server_host_keys=[self.key],
++            sftp_factory=lambda chan: FaultSFTP(chan, self.root, self.state),
++        )
++        self.params = {"host": "127.0.0.1", "port": self.listener.get_port(),
++                       "username": "u", "password": "p", "known_hosts": None}
++
++    async def stop(self):
++        if self.listener:
++            self.listener.close()
++            await self.listener.wait_closed()
++        self.tmp.cleanup()
++
++
++class IntegrityTests(unittest.IsolatedAsyncioTestCase):
++    async def asyncSetUp(self):
++        self.fixture = Fixture()
++        await self.fixture.start()
++        self.local = Path(tempfile.mkdtemp(prefix="pmud2-local-"))
++
++    async def asyncTearDown(self):
++        for item in self.local.glob("*"):
++            item.unlink(missing_ok=True)
++        self.local.rmdir()
++        await self.fixture.stop()
++
++    def uploader(self):
++        return CANDIDATE.SFTPUploader(self.fixture.params)
++
++    def downloader(self):
++        return CANDIDATE.SFTPDownloader(self.fixture.params)
++
++    async def test_large_roundtrip(self):
++        source = self.local / "large.bin"
++        source.write_bytes((b"0123456789abcdef" * (17 * 1024 * 1024 // 16 + 1))[:17 * 1024 * 1024 + 137])
++        uploaded = await self.uploader().upload_async(str(source), "large.bin", 2)
++        target = self.local / "download.bin"
++        downloaded = await self.downloader().download_async("large.bin", str(target), source.stat().st_size, 2)
++        self.assertTrue(uploaded["verify_passed"])
++        self.assertTrue(downloaded["verify_passed"])
++        self.assertEqual(source.read_bytes(), target.read_bytes())
++
++    async def test_empty_roundtrip(self):
++        source = self.local / "empty.bin"
++        source.write_bytes(b"")
++        await self.uploader().upload_async(str(source), "empty.bin", 2)
++        target = self.local / "empty.out"
++        await self.downloader().download_async("empty.bin", str(target), 0, 2)
++        self.assertEqual(target.read_bytes(), b"")
++
++    async def test_corrupt_upload_fails_and_old_target_stays(self):
++        source = self.local / "source.bin"
++        source.write_bytes(b"correct payload" * 1000)
++        self.fixture.root.joinpath("target.bin").write_bytes(b"old target")
++        self.fixture.state["corrupt"] = True
++        with self.assertRaises(RuntimeError):
++            await self.uploader().upload_async(str(source), "target.bin", 2)
++        self.assertEqual(self.fixture.root.joinpath("target.bin").read_bytes(), b"old target")
++        self.assertEqual(list(self.fixture.root.glob("target.bin.part-*")), [])
++
++    async def test_short_read_download_succeeds(self):
++        payload = b"short read payload" * 10000
++        self.fixture.root.joinpath("short.bin").write_bytes(payload)
++        self.fixture.state["short"] = True
++        target = self.local / "short.out"
++        await self.downloader().download_async("short.bin", str(target), len(payload), 2)
++        self.assertEqual(target.read_bytes(), payload)
++
++    async def test_wrong_supplied_hash_preserves_old_local_target(self):
++        payload = b"remote payload" * 500
++        self.fixture.root.joinpath("remote.bin").write_bytes(payload)
++        target = self.local / "remote.out"
++        target.write_bytes(b"old local target")
++        with self.assertRaises(RuntimeError):
++            await self.downloader().download_async("remote.bin", str(target), len(payload), 2, remote_hash="0" * 32)
++        self.assertEqual(target.read_bytes(), b"old local target")
++        self.assertEqual(list(self.local.glob("remote.out.part-*")), [])
++
++    async def test_worker_failure_cleans_staging(self):
++        source = self.local / "failure.bin"
++        source.write_bytes(b"failure payload" * 10000)
++        self.fixture.state["fail"] = True
++        with self.assertRaises(Exception):
++            await self.uploader().upload_async(str(source), "failure.bin", 2)
++        self.assertEqual(list(self.fixture.root.glob("failure.bin.part-*")), [])
++
++    async def test_original_verify_false_baseline_accepts_corruption(self):
++        baseline_value = os.environ.get("PMUD2_BASELINE_FILE")
++        if not baseline_value:
++            self.skipTest("set PMUD2_BASELINE_FILE to run the baseline reproduction")
++        baseline_path = Path(baseline_value)
++        if not baseline_path.exists():
++            self.skipTest("PMUD2 baseline snapshot is unavailable")
++        spec = importlib.util.spec_from_loader("pmud2_baseline", SourceFileLoader("pmud2_baseline", str(baseline_path)))
++        baseline = importlib.util.module_from_spec(spec)
++        spec.loader.exec_module(baseline)
++        source = self.local / "baseline.bin"
++        payload = b"baseline payload" * 1000
++        source.write_bytes(payload)
++        self.fixture.state["corrupt"] = True
++        result = await baseline.SFTPUploader(self.fixture.params).upload_async(str(source), "baseline.bin", 2, verify=False)
++        self.assertEqual(result["file_size"], len(payload))
++        self.assertIsNone(result["verify_passed"])
++        self.assertNotEqual(self.fixture.root.joinpath("baseline.bin").read_bytes(), payload)
++
++
++if __name__ == "__main__":
++    unittest.main()

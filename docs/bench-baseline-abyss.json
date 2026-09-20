@@ -1,0 +1,134 @@
+{
+  "phase": "baseline",
+  "server": "abyss",
+  "label": "baseline-abyss",
+  "python": "3.12.2 (tags/v3.12.2:6abddd9, Feb  6 2024, 21:26:36) [MSC v.1937 64 bit (AMD64)]",
+  "dependencies": {
+    "asyncssh": "2.24.0",
+    "netmiko": "4.7.0",
+    "paramiko": "4.0.0"
+  },
+  "started_at": "2026-09-20T05:53:57Z",
+  "size_bytes": 16777353,
+  "rounds": 3,
+  "times": [
+    {
+      "label": "round-1",
+      "upload_seconds": 2.910811,
+      "download_seconds": 40.265466,
+      "transfer_seconds": 43.176278,
+      "verify_seconds": 0.151157,
+      "total_seconds": 43.327588,
+      "sha256": {
+        "source": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f",
+        "remote": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f",
+        "download": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f"
+      },
+      "upload_result": {
+        "ip": "47.121.186.134",
+        "session_id": "4fd0ba5b06d843be9d2c27d58b798ba4",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\057f6fa435ad40968ed55edec4d8e94a\\payload.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_057f6fa435ad40968ed55edec4d8e94a/payload.bin",
+        "bytes": 16777353,
+        "method": "sftp"
+      },
+      "download_result": {
+        "ip": "47.121.186.134",
+        "session_id": "75d6249b19e249b79b2fa9a2a2846b72",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\057f6fa435ad40968ed55edec4d8e94a\\round-1.download.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_057f6fa435ad40968ed55edec4d8e94a/payload.bin",
+        "bytes": 16777353,
+        "method": "sftp"
+      },
+      "verified": true,
+      "verification": {
+        "remote_size": 16777353,
+        "download_size": 16777353,
+        "expected_size": 16777353,
+        "upload_bytes": 16777353,
+        "download_bytes": 16777353,
+        "size_match": true
+      }
+    },
+    {
+      "label": "round-2",
+      "upload_seconds": 3.293029,
+      "download_seconds": 40.184622,
+      "transfer_seconds": 43.477651,
+      "verify_seconds": 0.147667,
+      "total_seconds": 43.625454,
+      "sha256": {
+        "source": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f",
+        "remote": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f",
+        "download": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f"
+      },
+      "upload_result": {
+        "ip": "47.121.186.134",
+        "session_id": "f6eb2d2eaf964a1bbcaa2fe70fb6f368",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\057f6fa435ad40968ed55edec4d8e94a\\payload.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_057f6fa435ad40968ed55edec4d8e94a/payload.bin",
+        "bytes": 16777353,
+        "method": "sftp"
+      },
+      "download_result": {
+        "ip": "47.121.186.134",
+        "session_id": "4b34a2354ef24b4f842852548a714c90",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\057f6fa435ad40968ed55edec4d8e94a\\round-2.download.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_057f6fa435ad40968ed55edec4d8e94a/payload.bin",
+        "bytes": 16777353,
+        "method": "sftp"
+      },
+      "verified": true,
+      "verification": {
+        "remote_size": 16777353,
+        "download_size": 16777353,
+        "expected_size": 16777353,
+        "upload_bytes": 16777353,
+        "download_bytes": 16777353,
+        "size_match": true
+      }
+    },
+    {
+      "label": "round-3",
+      "upload_seconds": 2.413633,
+      "download_seconds": 40.313121,
+      "transfer_seconds": 42.726754,
+      "verify_seconds": 0.143575,
+      "total_seconds": 42.870464,
+      "sha256": {
+        "source": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f",
+        "remote": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f",
+        "download": "2625f4c0f9fe8b4ca25094270ac5cb4a65e6a418e1a8f311f0881d371cb9cc9f"
+      },
+      "upload_result": {
+        "ip": "47.121.186.134",
+        "session_id": "2bab161c858d4a32930dece9b221ac6f",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\057f6fa435ad40968ed55edec4d8e94a\\payload.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_057f6fa435ad40968ed55edec4d8e94a/payload.bin",
+        "bytes": 16777353,
+        "method": "sftp"
+      },
+      "download_result": {
+        "ip": "47.121.186.134",
+        "session_id": "3a9bb456927345c1a4eae8c448bf07ea",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\057f6fa435ad40968ed55edec4d8e94a\\round-3.download.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_057f6fa435ad40968ed55edec4d8e94a/payload.bin",
+        "bytes": 16777353,
+        "method": "sftp"
+      },
+      "verified": true,
+      "verification": {
+        "remote_size": 16777353,
+        "download_size": 16777353,
+        "expected_size": 16777353,
+        "upload_bytes": 16777353,
+        "download_bytes": 16777353,
+        "size_match": true
+      }
+    }
+  ],
+  "options": {},
+  "checks": [],
+  "ended_at": "2026-09-20T05:56:08Z",
+  "cleanup": true
+}

@@ -23,19 +23,19 @@ foreach ($cmd in @("python3", "python")) {
 }
 
 if (-not $python) {
-    Write-Host "  [ERROR] 未找到 Python。请安装 Python 3.8+ 并加入 PATH。" -ForegroundColor Red
+    Write-Host "  [ERROR] 未找到 Python。请安装 Python 3.10+ 并加入 PATH。" -ForegroundColor Red
     Write-Host "  下载地址: https://www.python.org/downloads/" -ForegroundColor Red
     exit 1
 }
 
-# --- 2. 安装 netmiko ---
-Write-Host "[2/5] 安装 netmiko 依赖..." -ForegroundColor Yellow
-& $python -m pip install netmiko --quiet
+# --- 2. 安装 netmiko 与 asyncssh ---
+Write-Host "[2/5] 安装 netmiko 与 asyncssh 依赖..." -ForegroundColor Yellow
+& $python -m pip install netmiko "asyncssh>=2.24,<3" --quiet
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  [ERROR] netmiko 安装失败。" -ForegroundColor Red
     exit 1
 }
-Write-Host "  [OK] netmiko 已安装" -ForegroundColor Green
+Write-Host "  [OK] netmiko 与 asyncssh 已安装" -ForegroundColor Green
 
 # --- 3. 确定路径 ---
 $projectRoot = Split-Path -Parent $PSScriptRoot

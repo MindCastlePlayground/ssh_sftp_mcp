@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from ssh_sftp_mcp.constants import CommandStatus, ExecMode, Field, JsonKey, Limits, Msg, Origin, RpcError, RpcMethod, RpcValue, ServiceCmd, ServiceFile, ServiceName, SessionStatus, Text, Tool, TransferMethod
 from ssh_sftp_mcp.models import CommandInfo, ServerInfo
@@ -473,80 +474,38 @@ class SmokeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             session.target("pwd", ExecMode.k8s, {})
 
-    def test_transfer_uses_shell_fallback_when_sftp_fails(self):
-        class Log:
-            def info(self, *args):
-                return None
-
-            def exception(self, *args):
-                return None
-
-        class Session:
-            id = "sid"
-            info = ServerInfo("127.0.0.1", 22, "u", "p")
-            log = Log()
-
-            def sftp(self):
-                raise PermissionError("denied")
-
-            def probe(self):
-                return True
-
-            def shell_upload(self, local_path, remote_path):
-                return Path(local_path).stat().st_size
-
+    def test_transfer_routes_to_reloadable_async_service(self):
         with tempfile.TemporaryDirectory() as tmp:
             local = Path(tmp) / "a.txt"
-            local.write_text("ok", encoding=Text.encoding)
+            local.write_bytes(b"ok")
             manager = SessionManager(ServerStore(Path(tmp) / "state"))
-            data = manager.transfer_session(Session(), str(local), "/tmp/a.txt", True)
-            self.assertEqual(data[Field.method], TransferMethod.shell)
+            info = ServerInfo("127.0.0.1", 22, "u", "p")
+            manager.store.reg(info.ip, info.port, info.username, info.password)
+            service = Mock()
+            service.run.return_value = {Field.bytes: 2, Field.method: TransferMethod.sftp}
+            manager.transfers.api = Mock(return_value=service)
+            opts = {"workers": 4}
+            data = manager.transfer(info.ip, str(local), "/tmp/a.txt", True, None, opts)
+            service.run.assert_called_once_with(str(local), "/tmp/a.txt", True)
+            self.assertEqual(manager.transfers.api.call_args.args, (info, opts))
+            self.assertIsNone(data[Field.session_id])
             self.assertEqual(data[Field.bytes], 2)
 
     def test_upload_resolves_relative_source_from_package_dir(self):
-        class Log:
-            def info(self, *args):
-                return None
-
-            def exception(self, *args):
-                return None
-
-        class Sftp:
-            def __init__(self, session):
-                self.session = session
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return None
-
-            def put(self, local_path, remote_path):
-                self.session.local_path = local_path
-
-        class Session:
-            id = "sid"
-            info = ServerInfo("127.0.0.1", 22, "u", "p")
-            log = Log()
-            local_path = ""
-
-            def sftp(self):
-                return Sftp(self)
-
-            def probe(self):
-                return True
-
         old = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 os.chdir(tmp)
-                session = Session()
+                session = Mock(id="sid", info=ServerInfo("127.0.0.1", 22, "u", "p"))
                 manager = SessionManager(ServerStore(Path(tmp) / "state"))
+                service = Mock()
+                service.run.return_value = {}
+                manager.transfers.api = Mock(return_value=service)
                 data = manager.transfer_session(session, "README.md", "/tmp/README.md", True)
             finally:
                 os.chdir(old)
         expected = Path(__file__).resolve().parents[1] / "README.md"
-        self.assertEqual(Path(session.local_path), expected)
+        self.assertEqual(Path(service.run.call_args.args[0]), expected)
         self.assertEqual(Path(data[Field.local_path]), expected)
 
     def test_upload_missing_source_fails_before_sftp(self):
@@ -745,46 +704,22 @@ class SmokeTest(unittest.TestCase):
         self.assertIsNone(net.stdin.channel.timeout)
         self.assertIsNone(net.stdout.channel.timeout)
 
-    def test_transfer_skips_shell_fallback_when_sftp_disconnects(self):
-        class Log:
-            def info(self, *args):
-                return None
-
-            def exception(self, *args):
-                return None
-
-            def warning(self, *args):
-                return None
-
-        class Session:
-            id = "sid"
-            info = ServerInfo("127.0.0.1", 22, "u", "p")
-            log = Log()
-            status = SessionStatus.connected
-            reason = ""
-            fallback = False
-
-            def sftp(self):
-                raise RuntimeError(Msg.disconnected)
-
-            def probe(self):
-                self.mark(SessionStatus.disconnected, Msg.disconnected)
-                return False
-
-            def mark(self, status, reason):
-                self.status = status
-                self.reason = reason
-
-            def shell_upload(self, local_path, remote_path):
-                self.fallback = True
-                return 0
-
+    def test_transfer_failure_is_not_retried_as_unverified_shell_upload(self):
         with tempfile.TemporaryDirectory() as tmp:
             local = Path(tmp) / "a.txt"
-            local.write_text("ok", encoding=Text.encoding)
-            session = Session()
+            local.write_bytes(b"ok")
+            session = Mock(id="sid", info=ServerInfo("127.0.0.1", 22, "u", "p"))
             manager = SessionManager(ServerStore(Path(tmp) / "state"))
-            with self.assertRaisesRegex(RuntimeError, Msg.disconnected):
+            service = Mock()
+            service.run.side_effect = RuntimeError("transfer integrity verification failed")
+            manager.transfers.api = Mock(return_value=service)
+            with self.assertRaisesRegex(RuntimeError, "integrity"):
                 manager.transfer_session(session, str(local), "/tmp/a.txt", True)
-        self.assertFalse(session.fallback)
-        self.assertEqual(session.status, SessionStatus.disconnected)
+            session.shell_upload.assert_not_called()
+
+    def test_transfer_rejects_session_from_different_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = SessionManager(ServerStore(Path(tmp)))
+            manager.sessions["sid"] = Mock(info=ServerInfo("other", 22, "u", "p"))
+            with self.assertRaisesRegex(ValueError, Msg.session_mismatch):
+                manager.transfer("requested", "anything", "/tmp/file", True, "sid")

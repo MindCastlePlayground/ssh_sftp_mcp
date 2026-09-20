@@ -21,14 +21,17 @@ class ServiceKey:
 
 class ServiceFile:
     tool = "tool_service.py"
+    transfer = "transfer.py"
 
 
 class ServiceName:
     tool = "tool"
+    transfer = "transfer"
 
 
 class ServiceEntry:
     tool = "ToolApi"
+    transfer = "AsyncTransfer"
 
 
 class ServiceError:
@@ -298,8 +301,8 @@ class ToolDesc:
     sessions = "List existing sessions for an IP, including disconnected sessions."
     close = "Close all sessions for an IP, or one session when session_id is supplied."
     status = "Return session status and optional command status."
-    upload = "Upload a local file to a server with SFTP."
-    download = "Download a remote file from a server with SFTP."
+    upload = "Upload one file with bounded AsyncSSH parallel writes. Always verify SHA-256 before publishing; auto uses remote hashing or full readback. workers=1..128, block_size=4096..131072."
+    download = "Download one file with bounded AsyncSSH parallel reads. Always verify SHA-256 before replacing the local target; auto uses remote hashing or full readback. workers=1..128, block_size=4096..131072."
     servers = "List registered SSH servers without passwords."
     version = "Return the current hot-reload service version timestamp."
     service_start = "Start or verify the local SSH/SFTP backend service process."
@@ -313,6 +316,7 @@ class Msg:
     unknown_session = "session not found"
     unknown_command = "command not found"
     disconnected = "ssh session is disconnected"
+    session_mismatch = "session does not belong to requested server"
     no_credential = "no registered credentials or live session for ip"
     tool_not_found = "tool not found"
     invalid_json = "invalid json"

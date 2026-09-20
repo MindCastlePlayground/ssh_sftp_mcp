@@ -12,9 +12,10 @@ import paramiko
 from netmiko import ConnectHandler
 from netmiko.base_connection import BaseConnection
 
-from .constants import CommandStatus, Default, ExecMode, Field, Limits, Msg, NetmikoKey, NetmikoValue, Origin, Prompt, Regex, SessionStatus, Shell, ShellCmd, Text, TransferMethod
+from .constants import CommandStatus, Default, ExecMode, Field, Limits, Msg, NetmikoKey, NetmikoValue, Origin, Prompt, Regex, ServiceEntry, ServiceFile, ServiceName, SessionStatus, Shell, ShellCmd, Text
 from .log import LogFactory
 from .models import CommandInfo, OutputChunk, ServerInfo, SessionView
+from .service_host import ServiceHost, ServiceSpec
 
 
 class LocalPath:
@@ -524,6 +525,9 @@ class SessionManager:
         self.store = store
         self.lock = threading.RLock()
         self.sessions: dict[str, SshSession] = {}
+        self.transfers = ServiceHost(ServiceSpec(
+            ServiceName.transfer, Path(__file__).with_name(ServiceFile.transfer), ServiceEntry.transfer,
+        ))
 
     def reg(self, ip: str, port: int, username: str, password: str) -> dict:
         return self.store.reg(ip, port, username, password)
@@ -600,56 +604,33 @@ class SessionManager:
                     return session
         return None
 
-    def transfer(self, ip: str, local_path: str, remote_path: str, upload: bool, session_id: str | None) -> dict:
+    def transfer(self, ip: str, local_path: str, remote_path: str, upload: bool,
+                 session_id: str | None, opts: dict | None = None) -> dict:
         session = self.pick(ip, session_id)
         if session:
-            return self.transfer_session(session, local_path, remote_path, upload)
+            if session.info.ip != ip:
+                raise ValueError(Msg.session_mismatch)
+            if not session.probe():
+                raise RuntimeError(Msg.disconnected)
+            return self.transfer_session(session, local_path, remote_path, upload, opts)
         if not self.store.has(ip):
             raise KeyError(Msg.no_credential)
-        temp = SshSession(self.store.get(ip), Origin.registered)
-        temp.conn()
-        try:
-            return self.transfer_session(temp, local_path, remote_path, upload)
-        finally:
-            temp.close()
+        return self.transfer_info(self.store.get(ip), None, local_path, remote_path, upload, opts)
 
-    def transfer_session(self, session: SshSession, local_path: str, remote_path: str, upload: bool) -> dict:
-        if upload:
-            local_path = LocalPath.src(local_path)
-        else:
-            local_path = LocalPath.dst(local_path)
-        method = TransferMethod.sftp
-        try:
-            session.log.info("sftp transfer start session=%s ip=%s upload=%s local=%s remote=%s", session.id, session.info.ip, upload, local_path, remote_path)
-            with session.sftp() as sftp:
-                if upload:
-                    sftp.put(local_path, remote_path)
-                    size = Path(local_path).stat().st_size
-                else:
-                    size = session.sftp_download(sftp, remote_path, local_path)
-            session.log.info("sftp transfer ok session=%s ip=%s bytes=%s", session.id, session.info.ip, size)
-        except Exception as exc:
-            session.log.exception("sftp transfer failed; trying shell fallback session=%s ip=%s", session.id, session.info.ip)
-            if not session.probe():
-                session.log.exception("sftp transfer disconnected; shell fallback skipped session=%s ip=%s", session.id, session.info.ip)
-                raise
-            method = TransferMethod.shell
-            try:
-                if upload:
-                    size = session.shell_upload(local_path, remote_path)
-                else:
-                    size = session.shell_download(remote_path, local_path)
-            except Exception:
-                session.log.exception("shell transfer fallback failed session=%s ip=%s", session.id, session.info.ip)
-                if not session.probe():
-                    session.mark(SessionStatus.disconnected, Msg.disconnected)
-                raise
-            session.log.info("shell transfer fallback ok session=%s ip=%s bytes=%s original=%s", session.id, session.info.ip, size, exc)
-        return {
-            Field.ip: session.info.ip,
-            Field.session_id: session.id,
+    def transfer_session(self, session: SshSession, local_path: str, remote_path: str,
+                         upload: bool, opts: dict | None = None) -> dict:
+        return self.transfer_info(session.info, session.id, local_path, remote_path, upload, opts)
+
+    def transfer_info(self, info: ServerInfo, session_id: str | None, local_path: str,
+                      remote_path: str, upload: bool, opts: dict | None = None) -> dict:
+        local_path = LocalPath.src(local_path) if upload else LocalPath.dst(local_path)
+        with self.lock:
+            service = self.transfers.api(info, opts)
+        data = service.run(local_path, remote_path, upload)
+        data.update({
+            Field.ip: info.ip,
+            Field.session_id: session_id,
             Field.local_path: local_path,
             Field.remote_path: remote_path,
-            Field.bytes: size,
-            Field.method: method,
-        }
+        })
+        return data

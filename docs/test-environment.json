@@ -1,0 +1,21 @@
+{
+  "date": "2026-09-20",
+  "baseline_commit": "c4056aa760c36e131e0283ad12247b7046c0c8ee",
+  "nas": {
+    "kernel": "Linux 6.12.41-trim aarch64",
+    "eth0_speed_mbps": 100,
+    "filesystem": "/tmp tmpfs",
+    "remote_sha256sum": true
+  },
+  "abyss": {
+    "kernel": "Linux 6.6.102-6.alnx4.x86_64 x86_64",
+    "filesystem": "/tmp tmpfs",
+    "remote_sha256sum": true
+  },
+  "pmud2_original_sha256": "9baafcde043fb5f3b0a51c5509dbd704ed3bc8871379011f808c158a7163ebaa",
+  "pmud2_fixed_sha256": "ec2c9f405ed615502d26b6cc97a948258f3743db75c2507ec55c25928f99127a",
+  "backend_ports": [
+    18765,
+    18766
+  ]
+}

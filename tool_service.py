@@ -111,6 +111,7 @@ class ToolApi:
                 str(args[Field.remote_path]),
                 True,
                 args.get(Field.session_id),
+                args,
             )
         if name == Tool.download:
             return self.manager.transfer(
@@ -119,6 +120,7 @@ class ToolApi:
                 str(args[Field.remote_path]),
                 False,
                 args.get(Field.session_id),
+                args,
             )
         if name == Tool.servers:
             return {Field.servers: self.manager.store.list()}

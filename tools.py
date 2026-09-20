@@ -7,6 +7,7 @@ from .service_host import ServiceHost, ServiceSpec
 from .service_client import ToolClient
 from .session import SessionManager
 from .store import ServerStore
+from .transfer_constants import TransferOption
 
 
 class Schemas:
@@ -125,12 +126,18 @@ class ToolCatalog:
                 Field.local_path: text(),
                 Field.remote_path: text(),
                 Field.session_id: text(),
+                TransferOption.workers: integer(32),
+                TransferOption.block_size: integer(131072),
+                TransferOption.verify: {JsonKey.type: RpcValue.string, JsonKey.enum: [TransferOption.auto, TransferOption.readback]},
             }, [Field.ip, Field.local_path, Field.remote_path])),
             cls.item(Tool.download, ToolDesc.download, Schemas.obj({
                 Field.ip: text(),
                 Field.remote_path: text(),
                 Field.local_path: text(),
                 Field.session_id: text(),
+                TransferOption.workers: integer(32),
+                TransferOption.block_size: integer(131072),
+                TransferOption.verify: {JsonKey.type: RpcValue.string, JsonKey.enum: [TransferOption.auto, TransferOption.readback]},
             }, [Field.ip, Field.remote_path, Field.local_path])),
             cls.item(Tool.servers, ToolDesc.servers, Schemas.obj({}, [])),
             cls.item(Tool.version, ToolDesc.version, Schemas.obj({}, [])),

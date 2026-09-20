@@ -30,19 +30,19 @@ for cmd in python3 python; do
 done
 
 if [ -z "$PYTHON" ]; then
-    echo -e "  ${RED}[ERROR] 未找到 Python。请安装 Python 3.8+。${NC}"
+    echo -e "  ${RED}[ERROR] 未找到 Python。请安装 Python 3.10+。${NC}"
     exit 1
 fi
 
-# --- 2. 安装 netmiko ---
-echo -e "${YELLOW}[2/5] 安装 netmiko 依赖...${NC}"
-if "$PYTHON" -m pip install netmiko --quiet 2>/dev/null; then
-    echo -e "  ${GREEN}[OK] netmiko 已安装${NC}"
+# --- 2. 安装 netmiko 与 asyncssh ---
+echo -e "${YELLOW}[2/5] 安装 netmiko 与 asyncssh 依赖...${NC}"
+if "$PYTHON" -m pip install netmiko "asyncssh>=2.24,<3" --quiet 2>/dev/null; then
+    echo -e "  ${GREEN}[OK] netmiko 与 asyncssh 已安装${NC}"
 else
     # 如果用户环境需要 --user
     echo -e "  ${YELLOW}尝试用户级安装...${NC}"
-    "$PYTHON" -m pip install --user netmiko --quiet
-    echo -e "  ${GREEN}[OK] netmiko 已安装 (user)${NC}"
+    "$PYTHON" -m pip install --user netmiko "asyncssh>=2.24,<3" --quiet
+    echo -e "  ${GREEN}[OK] netmiko 与 asyncssh 已安装 (user)${NC}"
 fi
 
 # --- 3. 确定路径 ---

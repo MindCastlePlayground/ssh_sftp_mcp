@@ -1,0 +1,58 @@
+{
+  "phase": "baseline",
+  "server": "abyss",
+  "label": "baseline-abyss",
+  "python": "3.12.2 (tags/v3.12.2:6abddd9, Feb  6 2024, 21:26:36) [MSC v.1937 64 bit (AMD64)]",
+  "dependencies": {
+    "asyncssh": "2.24.0",
+    "netmiko": "4.7.0",
+    "paramiko": "4.0.0"
+  },
+  "started_at": "2026-09-20T05:46:04Z",
+  "size_bytes": 134217865,
+  "rounds": 3,
+  "times": [
+    {
+      "label": "round-1",
+      "upload_seconds": 20.821987,
+      "download_seconds": 318.597869,
+      "transfer_seconds": 339.419857,
+      "verify_seconds": 0.591517,
+      "total_seconds": 340.011532,
+      "sha256": {
+        "source": "b59b619994c44ffe1c148ed1fea301e668d1a68c95a0068555e49c8984ee7cb6",
+        "remote": "b59b619994c44ffe1c148ed1fea301e668d1a68c95a0068555e49c8984ee7cb6",
+        "download": "b59b619994c44ffe1c148ed1fea301e668d1a68c95a0068555e49c8984ee7cb6"
+      },
+      "upload_result": {
+        "ip": "47.121.186.134",
+        "session_id": "71bb456ecb6d4513a4682f43209d54d5",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\7f608582e77f4b86ac6eeb427624b8ce\\payload.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_7f608582e77f4b86ac6eeb427624b8ce/payload.bin",
+        "bytes": 134217865,
+        "method": "sftp"
+      },
+      "download_result": {
+        "ip": "47.121.186.134",
+        "session_id": "49f68727adfd4dd9975dccdaca5d19c3",
+        "local_path": "H:\\Documents\\Temp\\ssh-sftp-async-benchmark-20260920\\work\\7f608582e77f4b86ac6eeb427624b8ce\\round-1.download.bin",
+        "remote_path": "/tmp/ssh_sftp_mcp_bench_7f608582e77f4b86ac6eeb427624b8ce/payload.bin",
+        "bytes": 134217865,
+        "method": "sftp"
+      },
+      "verified": true,
+      "verification": {
+        "remote_size": 134217865,
+        "download_size": 134217865,
+        "expected_size": 134217865,
+        "upload_bytes": 134217865,
+        "download_bytes": 134217865,
+        "size_match": true
+      }
+    }
+  ],
+  "options": {},
+  "error": "{\n  \"reason\": \"service process is unavailable\"\n}",
+  "cleanup": true,
+  "sampling_note": "Intentionally stopped during round 2 after completing one 128 MiB sample. Repeated comparison uses separate 16 MiB runs due to observed WAN bandwidth. The service-unavailable error records this intentional stop."
+}

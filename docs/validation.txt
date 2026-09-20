@@ -1,0 +1,13 @@
+MCP: python -B -m unittest ssh_sftp_mcp.tests.test_smoke ssh_sftp_mcp.tests.test_transfer
+............
+----------------------------------------------------------------------
+Ran 50 tests in 26.662s
+
+OK
+
+PMUD2: python -B -m unittest discover -s tests -v (PMUD2_BASELINE_FILE points to original backup)
+
+----------------------------------------------------------------------
+Ran 14 tests in 46.415s
+
+OK
