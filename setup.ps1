@@ -30,7 +30,7 @@ if (-not $python) {
 
 # --- 2. 安装 netmiko 与 asyncssh ---
 Write-Host "[2/5] 安装 netmiko 与 asyncssh 依赖..." -ForegroundColor Yellow
-& $python -m pip install netmiko "asyncssh>=2.24,<3" --quiet
+& $python -m pip install -r (Join-Path $PSScriptRoot "requirements.txt") --quiet
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  [ERROR] netmiko 安装失败。" -ForegroundColor Red
     exit 1

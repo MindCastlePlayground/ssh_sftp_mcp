@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ssh_sftp_mcp.constants import Default, ExecMode, Field, Limits, Msg, Tool
+from ssh_sftp_mcp.constants import Auth, Default, ExecMode, Field, Limits, Msg, Protocol, Tool, WinrmDefault
+from ssh_sftp_mcp.winrm import Flags
 
 
 class BatchExec:
@@ -52,6 +53,22 @@ class ToolApi:
     def __init__(self, manager):
         self.manager = manager
 
+    @staticmethod
+    def proto(args: dict, default: str) -> str:
+        value = str(args.get(Field.protocol, default))
+        if value not in (Protocol.ssh.value, Protocol.winrm.value):
+            raise ValueError(Msg.bad_protocol)
+        return value
+
+    @staticmethod
+    def auth(args: dict) -> str:
+        if Field.auth not in args or args.get(Field.auth) in (None, ""):
+            return Auth.ntlm
+        value = str(args[Field.auth])
+        if value not in Auth.values:
+            raise ValueError(Msg.bad_auth)
+        return value
+
     def route(self, name: str, args: dict) -> dict | list:
         if name == Tool.register:
             return self.manager.reg(
@@ -59,35 +76,58 @@ class ToolApi:
                 int(args[Field.port]),
                 str(args[Field.username]),
                 str(args[Field.password]),
+                self.proto(args, Protocol.ssh.value),
+                Flags.on(args.get(Field.ssl), False),
+                self.auth(args),
+            )
+        if name == Tool.winrm_register:
+            port = int(args.get(Field.port, WinrmDefault.port))
+            return self.manager.reg(
+                str(args[Field.ip]),
+                port,
+                str(args[Field.username]),
+                str(args[Field.password]),
+                Protocol.winrm.value,
+                Flags.on(args.get(Field.ssl), port == WinrmDefault.https),
+                self.auth(args),
             )
         if name == Tool.update:
+            protocol = self.proto(args, "") if Field.protocol in args else None
+            if protocol == "":
+                protocol = None
             return self.manager.upd(
                 str(args[Field.old_ip]),
                 str(args[Field.ip]),
                 int(args[Field.port]),
                 str(args[Field.username]),
                 str(args[Field.password]),
+                protocol,
+                Flags.on(args.get(Field.ssl), False) if Field.ssl in args else None,
+                self.auth(args) if Field.auth in args else None,
             )
         if name == Tool.delete:
             return self.manager.delete(str(args[Field.ip]))
-        if name == Tool.connect:
+        if name in (Tool.connect, Tool.winrm_connect):
             return self.manager.conn(str(args[Field.ip]))
-        if name == Tool.once:
+        if name in (Tool.once, Tool.winrm_once):
             mode = ExecMode(str(args.get(Field.mode, ExecMode.host.value)))
+            opts = dict(args)
+            if name == Tool.winrm_once:
+                opts[Field.protocol] = Protocol.winrm.value
             return self.manager.once(
                 str(args[Field.ip]),
-                int(args[Field.port]),
+                int(args.get(Field.port, WinrmDefault.port if name == Tool.winrm_once else Default.port)),
                 str(args[Field.username]),
                 str(args[Field.password]),
                 str(args[Field.command]),
                 mode,
-                args,
+                opts,
             )
-        if name == Tool.sessions:
+        if name in (Tool.sessions, Tool.winrm_sessions):
             return {Field.sessions: self.manager.list(str(args[Field.ip]))}
-        if name == Tool.close:
+        if name in (Tool.close, Tool.winrm_close):
             return {Field.sessions: self.manager.close(str(args[Field.ip]), args.get(Field.session_id))}
-        if name == Tool.send:
+        if name in (Tool.send, Tool.winrm_send):
             mode = ExecMode(str(args.get(Field.mode, ExecMode.host.value)))
             inp = args.get(Field.input)
             if inp is None:
@@ -95,7 +135,7 @@ class ToolApi:
             return self.manager.send(str(args[Field.session_id]), str(inp), mode, args)
         if name == Tool.send_many:
             return BatchExec.run(self.manager, args[Field.items])
-        if name == Tool.output:
+        if name == Tool.output or name == Tool.winrm_output:
             return self.manager.output(
                 str(args[Field.session_id]),
                 args.get(Field.command_id),
@@ -104,7 +144,7 @@ class ToolApi:
             )
         if name == Tool.status:
             return self.manager.status(str(args[Field.session_id]), args.get(Field.command_id))
-        if name == Tool.upload:
+        if name in (Tool.upload, Tool.winrm_upload):
             return self.manager.transfer(
                 str(args[Field.ip]),
                 str(args[Field.local_path]),
@@ -113,7 +153,7 @@ class ToolApi:
                 args.get(Field.session_id),
                 args,
             )
-        if name == Tool.download:
+        if name in (Tool.download, Tool.winrm_download):
             return self.manager.transfer(
                 str(args[Field.ip]),
                 str(args[Field.local_path]),

@@ -34,19 +34,18 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-# --- 2. 安装 netmiko 与 asyncssh ---
-echo -e "${YELLOW}[2/5] 安装 netmiko 与 asyncssh 依赖...${NC}"
-if "$PYTHON" -m pip install netmiko "asyncssh>=2.24,<3" --quiet 2>/dev/null; then
-    echo -e "  ${GREEN}[OK] netmiko 与 asyncssh 已安装${NC}"
+# --- 2. 安装 Python 依赖 ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo -e "${YELLOW}[2/5] 安装 netmiko、asyncssh、pypsrp、pywinrm...${NC}"
+if "$PYTHON" -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet 2>/dev/null; then
+    echo -e "  ${GREEN}[OK] netmiko、asyncssh、pypsrp、pywinrm 已安装${NC}"
 else
-    # 如果用户环境需要 --user
     echo -e "  ${YELLOW}尝试用户级安装...${NC}"
-    "$PYTHON" -m pip install --user netmiko "asyncssh>=2.24,<3" --quiet
-    echo -e "  ${GREEN}[OK] netmiko 与 asyncssh 已安装 (user)${NC}"
+    "$PYTHON" -m pip install --user -r "$SCRIPT_DIR/requirements.txt" --quiet
+    echo -e "  ${GREEN}[OK] Python 依赖已安装 (user)${NC}"
 fi
 
 # --- 3. 确定路径 ---
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 MCP_CWD="$PROJECT_ROOT"
 

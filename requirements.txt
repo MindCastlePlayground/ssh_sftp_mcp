@@ -1,0 +1,4 @@
+netmiko
+asyncssh>=2.24,<3
+pypsrp
+pywinrm

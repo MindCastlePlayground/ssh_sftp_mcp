@@ -16,13 +16,56 @@
 - 按 IP 进行 SFTP 上传/下载
 - 支持宿主机、Docker 和 Kubernetes 三种命令模式
 
-## 依赖
+## 安装
+
+需要 Python 3.10+。在仓库根目录执行：
 
 ```bash
-pip install netmiko "asyncssh>=2.24,<3"
+bash setup.sh
 ```
 
-需要 Python 3.10+。交互式 SSH 会话继续使用 Netmiko / Paramiko；文件传输使用独立的 AsyncSSH 连接，不占用交互式 shell。
+Windows：
+
+```powershell
+.\setup.ps1
+```
+
+脚本会安装 `requirements.txt` 里的 `netmiko`、`asyncssh`、`pypsrp`、`pywinrm`，并生成 MCP 客户端配置。手动安装：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+从包含本包的父目录启动：
+
+```bash
+python -m ssh_sftp_mcp
+```
+
+`cwd` 必须是包目录的父目录。例如仓库放在 `/opt/ssh_sftp_mcp` 时，`cwd` 为 `/opt`。
+
+```json
+{
+  "mcpServers": {
+    "ssh-sftp-mcp": {
+      "command": "python",
+      "args": ["-m", "ssh_sftp_mcp"],
+      "cwd": "/opt"
+    }
+  }
+}
+```
+
+## 依赖
+
+交互式 SSH 会话使用 Netmiko / Paramiko。文件传输使用独立的 AsyncSSH 连接，不占用交互式 shell。WinRM 使用 pypsrp：同一条 WS-Man 连接上保持 PowerShell runspace，并用这条连接复制文件。
+
+## 会话复用和单次执行
+
+- `ssh_connect` 打开持久交互 shell，返回 `session_id`。之后的 `ssh_send_input` / `ssh_read_output` 复用该会话，`cd` 和变量会保留。命令结束由 shell 提示符或 systemd OSC 3008 结束标记判断；OSC 3008 还会带回退出码。
+- `ssh_temp_exec` 是单次执行：连接、读取 stdout/stderr 和退出码、然后关闭，不留下会话。
+- `sftp_upload` / `sftp_download` 可带 `session_id`。服务会核对会话所属主机，并用该主机凭据传输；传输走单独的 SFTP 连接，不打断交互 shell。
+- WinRM 对应工具是 `winrm_connect`、`winrm_send_input`、`winrm_read_output`、`winrm_temp_exec`、`winrm_upload`、`winrm_download`。`shell=powershell` 复用 runspace；`shell=cmd` 在同一连接上执行一条 `cmd.exe`。上传和下载带 `session_id` 时，相对路径按该 runspace 的当前目录解析，并在发布前核对 SHA-256。默认端口 5985（明文）或 `ssl=true` 时 5986，认证默认 `ntlm`。命令执行和文件传输已用协议替身做单元验证；当前环境没有 Windows 主机，所以没有对真实 WinRM 服务做联机验收。
 
 ## 运行
 
@@ -189,6 +232,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-repo>/main/setup.sh)
 | `sftp_download(ip, remote_path, local_path, session_id?, workers?, block_size?, verify?)` | SFTP 下载文件 |
 | `ssh_list_servers()` | 列出已注册服务器（不含密码） |
 | `service_start()` | 启动或确认本地 SSH/SFTP 后端服务进程 |
+| `winrm_register(ip, username, password, port?, ssl?, auth?)` | 注册 WinRM 主机，默认端口 5985；`ssl=true` 时默认按 5986 连接 |
+| `winrm_connect(ip)` | 打开可复用的 WinRM PowerShell runspace，返回 `session_id` |
+| `winrm_send_input(session_id, input, shell?)` | 在已有 WinRM 会话中执行命令。`powershell` 保留目录和变量，`cmd` 返回进程退出码 |
+| `winrm_read_output(session_id, command_id?, cursor?, limit?)` | 读取 WinRM 命令输出 |
+| `winrm_temp_exec(ip, username, password, command, port?, shell?, ssl?, auth?)` | 单次 WinRM 执行，不保留会话 |
+| `winrm_upload(ip, local_path, remote_path, session_id?)` | 经 WinRM 上传并校验 SHA-256 |
+| `winrm_download(ip, remote_path, local_path, session_id?)` | 经 WinRM 下载并校验 SHA-256 |
+| `winrm_close(ip, session_id?)` | 关闭 WinRM 会话 |
+| `winrm_list_sessions(ip)` | 列出该 IP 的会话 |
 | `service_version()` | 返回当前后端服务热加载版本信息 |
 
 ## 注册表同步

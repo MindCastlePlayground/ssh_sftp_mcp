@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from time import time
 
-from .constants import CommandStatus, Field, Origin, SessionStatus
+from .constants import Auth, CommandStatus, Field, Origin, Protocol, SessionStatus
 
 
 @dataclass
@@ -10,6 +10,9 @@ class ServerInfo:
     port: int
     username: str
     password: str
+    protocol: str = Protocol.ssh.value
+    ssl: bool = False
+    auth: str = Auth.ntlm
 
     def data(self) -> dict:
         return {
@@ -17,6 +20,9 @@ class ServerInfo:
             Field.port: self.port,
             Field.username: self.username,
             Field.password: self.password,
+            Field.protocol: self.protocol,
+            Field.ssl: self.ssl,
+            Field.auth: self.auth,
         }
 
     def public(self) -> dict:
@@ -25,6 +31,9 @@ class ServerInfo:
             Field.port: self.port,
             Field.username: self.username,
             Field.registered: True,
+            Field.protocol: self.protocol,
+            Field.ssl: self.ssl,
+            Field.auth: self.auth,
         }
 
     @classmethod
@@ -34,6 +43,9 @@ class ServerInfo:
             port=int(data[Field.port]),
             username=str(data[Field.username]),
             password=str(data[Field.password]),
+            protocol=str(data.get(Field.protocol, Protocol.ssh.value)),
+            ssl=bool(data.get(Field.ssl, False)),
+            auth=str(data.get(Field.auth, Auth.ntlm)),
         )
 
 
@@ -89,6 +101,7 @@ class SessionView:
     reason: str
     started_at: float
     last_seen_at: float
+    protocol: str = Protocol.ssh.value
 
     def data(self) -> dict:
         return {
@@ -101,4 +114,5 @@ class SessionView:
             Field.reason: self.reason,
             Field.started_at: self.started_at,
             Field.last_seen_at: self.last_seen_at,
+            Field.protocol: self.protocol,
         }

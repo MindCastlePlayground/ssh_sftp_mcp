@@ -26,6 +26,7 @@ class TransferMode:
     download = "download"
     sftp = "sftp"
     shell = "shell"
+    winrm = "winrm"
 
 
 class TransferError:

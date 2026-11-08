@@ -12,10 +12,11 @@ import paramiko
 from netmiko import ConnectHandler
 from netmiko.base_connection import BaseConnection
 
-from .constants import CommandStatus, Default, ExecMode, Field, Limits, Msg, NetmikoKey, NetmikoValue, Origin, Prompt, Regex, ServiceEntry, ServiceFile, ServiceName, SessionStatus, Shell, ShellCmd, Text
+from .constants import Auth, CommandStatus, Default, ExecMode, Field, Limits, Msg, NetmikoKey, NetmikoValue, Origin, Osc, Prompt, Protocol, Regex, ServiceEntry, ServiceFile, ServiceName, SessionStatus, Shell, ShellCmd, Text, WinrmDefault
 from .log import LogFactory
 from .models import CommandInfo, OutputChunk, ServerInfo, SessionView
 from .service_host import ServiceHost, ServiceSpec
+from .winrm import Flags, WinrmOnce, WinrmSession, WinrmTransfer
 
 
 class LocalPath:
@@ -124,6 +125,23 @@ class NetmikoTransport:
         return self.ssh().exec_command(command, timeout=Limits.transfer_timeout)
 
 
+class Screen:
+    osc = re.compile(Osc.noise)
+    end = re.compile(Osc.end)
+    csi = re.compile(Regex.ansi)
+
+    @classmethod
+    def plain(cls, text: str) -> str:
+        text = cls.osc.sub("", text)
+        return cls.csi.sub("", text)
+
+    @classmethod
+    def code(cls, kind: str, status: str | None) -> int:
+        if kind == Osc.success:
+            return 0
+        return int(status or "1")
+
+
 class SshSession:
     def __init__(self, info: ServerInfo, origin: Origin):
         self.id = uuid.uuid4().hex
@@ -142,6 +160,8 @@ class SshSession:
         self.prompt = ""
         self.chunks: list[OutputChunk] = []
         self.commands: dict[str, CommandInfo] = {}
+        self.raw = ""
+        self.mark_end = 0
         self.log = LogFactory.get()
 
     def conn(self) -> dict:
@@ -188,6 +208,7 @@ class SshSession:
             reason=self.reason,
             started_at=self.started_at,
             last_seen_at=self.last_seen_at,
+            protocol=self.info.protocol,
         )
 
     def probe(self) -> bool:
@@ -250,14 +271,32 @@ class SshSession:
                 self.chunks = self.chunks[-Limits.chunks:]
             return self.seq
 
+    def feed_mark(self, text: str) -> int | None:
+        before = len(self.raw)
+        self.raw = (self.raw + text)[-Limits.tail:]
+        dropped = before + len(text) - len(self.raw)
+        self.mark_end = max(0, self.mark_end - dropped)
+        found = None
+        last_end = 0
+        for match in Screen.end.finditer(self.raw):
+            last_end = match.end()
+            found = Screen.code(match.group(1), match.group(2))
+        if last_end <= self.mark_end:
+            return None
+        self.mark_end = last_end
+        return found
+
     def scan(self, text: str) -> None:
         with self.lock:
-            self.tail = (self.tail + text)[-Limits.tail:]
+            code = self.feed_mark(text)
+            self.tail = (self.tail + Screen.plain(text))[-Limits.tail:]
             cmd = self.active()
-            if cmd and self.prompted(self.tail):
+            if cmd and (code is not None or self.prompted(self.tail)):
                 cmd.status = CommandStatus.done
                 cmd.ended_at = time.time()
                 cmd.end_seq = self.seq
+                if code is not None:
+                    cmd.exit_code = code
 
     def send(self, command: str, mode: ExecMode, opts: dict) -> dict:
         if not self.probe():
@@ -333,12 +372,15 @@ class SshSession:
         return bool(re.search(Prompt.pattern, clean))
 
     def find_prompt(self, text: str) -> str:
-        clean = re.sub(Regex.ansi, Text.empty, text)
+        clean = Screen.plain(text)
         clean = clean.replace("\r\n", Shell.enter).replace("\r", Shell.enter)
         lines = [line for line in clean.split(Shell.enter) if line.strip()]
-        if lines and re.search(Prompt.line, lines[-1]):
-            return lines[-1]
-        return Text.empty
+        if not lines:
+            return Text.empty
+        match = re.search(Prompt.line, lines[-1])
+        if not match:
+            return Text.empty
+        return match.group(0)
 
     def output(self, command_id: str | None, cursor: int, limit: int) -> dict:
         with self.lock:
@@ -372,7 +414,7 @@ class SshSession:
             }
 
     def clean(self, text: str, cmd: CommandInfo | None = None) -> str:
-        text = re.sub(Regex.ansi, "", text)
+        text = Screen.plain(text)
         if cmd:
             text = self.strip_echo(text, cmd.sent or cmd.command)
             text = self.strip_prompt(text)
@@ -529,11 +571,13 @@ class SessionManager:
             ServiceName.transfer, Path(__file__).with_name(ServiceFile.transfer), ServiceEntry.transfer,
         ))
 
-    def reg(self, ip: str, port: int, username: str, password: str) -> dict:
-        return self.store.reg(ip, port, username, password)
+    def reg(self, ip: str, port: int, username: str, password: str,
+            protocol: str = Protocol.ssh.value, ssl: bool = False, auth: str = Auth.ntlm) -> dict:
+        return self.store.reg(ip, port, username, password, protocol, ssl, auth)
 
-    def upd(self, old_ip: str, ip: str, port: int, username: str, password: str) -> dict:
-        return self.store.upd(old_ip, ip, port, username, password)
+    def upd(self, old_ip: str, ip: str, port: int, username: str, password: str,
+            protocol: str | None = None, ssl: bool | None = None, auth: str | None = None) -> dict:
+        return self.store.upd(old_ip, ip, port, username, password, protocol, ssl, auth)
 
     def delete(self, ip: str) -> dict:
         closed = self.close(ip)
@@ -548,6 +592,18 @@ class SessionManager:
         return self.open(ServerInfo(ip=ip, port=port, username=username, password=password), Origin.temporary)
 
     def once(self, ip: str, port: int, username: str, password: str, command: str, mode: ExecMode, opts: dict) -> dict:
+        protocol = str(opts.get(Field.protocol, Protocol.ssh.value))
+        if protocol == Protocol.winrm.value:
+            info = ServerInfo(
+                ip=ip,
+                port=port,
+                username=username,
+                password=password,
+                protocol=protocol,
+                ssl=Flags.on(opts.get(Field.ssl), port == WinrmDefault.https),
+                auth=str(opts.get(Field.auth, Auth.ntlm)),
+            )
+            return WinrmOnce.run(info, command, opts)
         session = SshSession(ServerInfo(ip=ip, port=port, username=username, password=password), Origin.temporary)
         data = session.conn()
         try:
@@ -558,7 +614,10 @@ class SessionManager:
             session.close()
 
     def open(self, info: ServerInfo, origin: Origin) -> dict:
-        session = SshSession(info, origin)
+        if info.protocol == Protocol.winrm.value:
+            session = WinrmSession(info, origin)
+        else:
+            session = SshSession(info, origin)
         data = session.conn()
         with self.lock:
             self.sessions[session.id] = session
@@ -607,6 +666,26 @@ class SessionManager:
     def transfer(self, ip: str, local_path: str, remote_path: str, upload: bool,
                  session_id: str | None, opts: dict | None = None) -> dict:
         session = self.pick(ip, session_id)
+        info = session.info if session else None
+        if info is None and self.store.has(ip):
+            info = self.store.get(ip)
+        if info is not None and info.protocol == Protocol.winrm.value:
+            if session and session.info.ip != ip:
+                raise ValueError(Msg.session_mismatch)
+            if session and not session.probe():
+                raise RuntimeError(Msg.disconnected)
+            if info is None:
+                raise KeyError(Msg.no_credential)
+            local = LocalPath.src(local_path) if upload else LocalPath.dst(local_path)
+            link = session.link if session else None
+            data = WinrmTransfer(info, link).run(local, remote_path, upload)
+            data.update({
+                Field.ip: info.ip,
+                Field.session_id: session.id if session else None,
+                Field.local_path: local,
+                Field.remote_path: remote_path,
+            })
+            return data
         if session:
             if session.info.ip != ip:
                 raise ValueError(Msg.session_mismatch)

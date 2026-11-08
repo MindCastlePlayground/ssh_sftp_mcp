@@ -3,7 +3,7 @@ from enum import Enum
 
 class Meta:
     name = "ssh-sftp-mcp"
-    version = "0.1.0"
+    version = "0.2.0"
     protocol = "2025-06-18"
 
 
@@ -82,6 +82,36 @@ class Default:
     namespace = "default"
     shell = "sh"
     read = 65536
+
+
+class Protocol(Enum):
+    ssh = "ssh"
+    winrm = "winrm"
+
+
+class Auth:
+    ntlm = "ntlm"
+    basic = "basic"
+    credssp = "credssp"
+    negotiate = "negotiate"
+    values = (ntlm, basic, credssp, negotiate)
+
+
+class WinrmDefault:
+    port = 5985
+    https = 5986
+    shell = "powershell"
+    auth = Auth.ntlm
+    envelope = 512000
+    operation_timeout = 120
+    read_timeout = 180
+    connect_timeout = 30
+
+
+class WinrmShell:
+    powershell = "powershell"
+    cmd = "cmd"
+    values = (powershell, cmd)
 
 
 class NetmikoKey:
@@ -228,6 +258,10 @@ class Field:
     items = "items"
     index = "index"
     ok = "ok"
+    protocol = "protocol"
+    ssl = "ssl"
+    auth = "auth"
+    verified = "verified"
 
 
 class LiveEnv:
@@ -287,6 +321,15 @@ class Tool:
     servers = "ssh_list_servers"
     version = "service_version"
     service_start = "service_start"
+    winrm_register = "winrm_register"
+    winrm_connect = "winrm_connect"
+    winrm_send = "winrm_send_input"
+    winrm_output = "winrm_read_output"
+    winrm_once = "winrm_temp_exec"
+    winrm_upload = "winrm_upload"
+    winrm_download = "winrm_download"
+    winrm_close = "winrm_close"
+    winrm_sessions = "winrm_list_sessions"
 
 
 class ToolDesc:
@@ -306,6 +349,15 @@ class ToolDesc:
     servers = "List registered SSH servers without passwords."
     version = "Return the current hot-reload service version timestamp."
     service_start = "Start or verify the local SSH/SFTP backend service process."
+    winrm_register = "Register one Windows host for WinRM. Default port is 5985 (HTTP) or 5986 when ssl is true. Password is stored in plaintext like SSH registrations."
+    winrm_connect = "Open a persistent WinRM PowerShell runspace for a registered host and return session_id. Later winrm_send_input calls reuse that runspace, so location and variables persist. Include session_id in the user-facing reply."
+    winrm_send = "Run a command in an existing WinRM session. shell=powershell (default) reuses runspace state. shell=cmd runs one cmd.exe process on the same connection and returns its exit code. Read output with winrm_read_output."
+    winrm_output = "Read stdout captured for a WinRM session command. Include session_id in the user-facing reply."
+    winrm_once = "Open WinRM, run one command, return stdout, stderr, and exit_code, then close. This does not leave a reusable session."
+    winrm_upload = "Upload one file over the host's WinRM connection. Pass session_id to reuse that session's working directory for a relative remote_path. The copy is checksum-verified before it is reported."
+    winrm_download = "Download one file over the host's WinRM connection. Pass session_id to resolve a relative remote_path against that session. The copy is checksum-verified before the local file is published."
+    winrm_close = "Close WinRM sessions for an IP, or one session when session_id is supplied."
+    winrm_sessions = "List WinRM and SSH sessions stored for an IP."
 
 
 class Msg:
@@ -335,6 +387,16 @@ class Msg:
     batch_too_large = "batch item limit exceeded"
     raw_sent = "raw input sent; completion is not tracked"
     command_running = "another command is still running in this session"
+    bad_protocol = "protocol must be ssh or winrm"
+    bad_auth = "auth must be ntlm, basic, credssp, or negotiate"
+    bad_shell = "shell must be powershell or cmd"
+    winrm_failed = "winrm command failed"
+
+
+class Osc:
+    noise = r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    end = r"\x1b\]3008;end=[^;\x07\x1b]*;exit=(success|failure)(?:;status=(\d+))?"
+    success = "success"
 
 
 class TransferMethod:
@@ -378,8 +440,8 @@ class ExecMode(Enum):
 
 
 class Prompt:
-    pattern = r"(?m)(?:^|\n)[^\n]{0,200}[#>$%]\s*$"
-    line = r"[^\n]{0,200}[#>$%]\s*$"
+    pattern = r"(?m)(?:^|\n)[^\n]{0,2000}[#>$%]\s*$"
+    line = r"[^\n]{0,2000}[#>$%]\s*$"
 
 
 class Shell:

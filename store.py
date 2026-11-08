@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from threading import RLock
 
-from .constants import Env, Field, Msg, Store, Text
+from .constants import Auth, Env, Field, Msg, Protocol, Store, Text
 from .log import LogFactory
 from .models import ServerInfo
 
@@ -61,25 +61,36 @@ class ServerStore:
             if mtime != self.mtime:
                 self.load()
 
-    def reg(self, ip: str, port: int, username: str, password: str) -> dict:
+    def reg(self, ip: str, port: int, username: str, password: str,
+            protocol: str = Protocol.ssh.value, ssl: bool = False, auth: str = Auth.ntlm) -> dict:
         with self.lock:
             self.sync()
             if ip in self.items:
                 raise ValueError(Msg.duplicate_ip)
-            self.items[ip] = ServerInfo(ip=ip, port=port, username=username, password=password)
+            self.items[ip] = ServerInfo(
+                ip=ip, port=port, username=username, password=password,
+                protocol=protocol, ssl=ssl, auth=auth,
+            )
             self.save()
             return self.items[ip].public()
 
-    def upd(self, old_ip: str, ip: str, port: int, username: str, password: str) -> dict:
+    def upd(self, old_ip: str, ip: str, port: int, username: str, password: str,
+            protocol: str | None = None, ssl: bool | None = None, auth: str | None = None) -> dict:
         with self.lock:
             self.sync()
             if old_ip not in self.items:
                 raise KeyError(Msg.unknown_ip)
             if old_ip != ip and ip in self.items:
                 raise ValueError(Msg.duplicate_ip)
+            old = self.items[old_ip]
             if old_ip != ip:
                 del self.items[old_ip]
-            self.items[ip] = ServerInfo(ip=ip, port=port, username=username, password=password)
+            self.items[ip] = ServerInfo(
+                ip=ip, port=port, username=username, password=password,
+                protocol=old.protocol if protocol is None else protocol,
+                ssl=old.ssl if ssl is None else ssl,
+                auth=old.auth if auth is None else auth,
+            )
             self.save()
             data = self.items[ip].public()
             data[Field.status] = Msg.updated

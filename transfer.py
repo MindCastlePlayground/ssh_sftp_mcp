@@ -228,9 +228,18 @@ class AsyncTransfer:
     async def _publish(sftp, temp, remote):
         try:
             await sftp.posix_rename(temp, remote)
+            return
         except asyncssh.SFTPOpUnsupported:
+            first = None
+        except asyncssh.SFTPError as exc:
+            first = exc
+        try:
             # Standard SFTP rename refuses to replace an existing target. Never delete it first.
             await sftp.rename(temp, remote)
+        except asyncssh.SFTPError:
+            if first is not None:
+                raise first
+            raise
 
     @staticmethod
     def _local_unchanged(path, stamp):

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import importlib.util
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from .constants import Field, ServiceError, ServiceKey
+from .constants import Field, ServiceKey
 
 
 class ServiceSpec:
@@ -82,14 +81,14 @@ class ModuleBox:
         module_name = ServiceNames.module(spec, sig)
         module = sys.modules.get(module_name)
         if module is None:
-            module_spec = importlib.util.spec_from_file_location(module_name, path)
-            if module_spec is None:
-                raise RuntimeError(ServiceError.module_spec)
-            if module_spec.loader is None:
-                raise RuntimeError(ServiceError.loader)
-            module = importlib.util.module_from_spec(module_spec)
+            # Compile the bytes just read. importlib's path cache can reuse a
+            # pyc from the previous service version when the file is rewritten
+            # under a new module name.
+            module = ModuleType(module_name)
+            module.__file__ = str(path)
             sys.modules[module_name] = module
-            module_spec.loader.exec_module(module)
+            code = compile(path.read_bytes(), str(path), "exec")
+            exec(code, module.__dict__)
         ModuleBox.purge(spec, module_name)
         return ServiceRef(module, sig)
 

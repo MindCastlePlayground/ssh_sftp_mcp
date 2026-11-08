@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from .constants import Default, ExecMode, Field, JsonKey, Msg, ServiceEntry, ServiceFile, ServiceName, RpcValue, Tool, ToolDesc
+from .constants import Auth, Default, ExecMode, Field, JsonKey, Msg, Protocol, RpcValue, ServiceEntry, ServiceFile, ServiceName, Tool, ToolDesc, WinrmDefault, WinrmShell
 from .log import LogFactory
 from .service_host import ServiceHost, ServiceSpec
 from .service_client import ToolClient
@@ -42,6 +42,17 @@ class Schemas:
     def mode() -> dict:
         return {JsonKey.type: RpcValue.string, JsonKey.enum: [item.value for item in ExecMode]}
 
+    @staticmethod
+    def flag(default: bool = False) -> dict:
+        return {JsonKey.type: RpcValue.boolean, JsonKey.default: default}
+
+    @staticmethod
+    def choice(values: tuple[str, ...] | list[str], default: str | None = None) -> dict:
+        data = {JsonKey.type: RpcValue.string, JsonKey.enum: list(values)}
+        if default is not None:
+            data[JsonKey.default] = default
+        return data
+
 
 class ToolCatalog:
     @staticmethod
@@ -62,6 +73,9 @@ class ToolCatalog:
                 Field.port: integer(Default.port),
                 Field.username: text(),
                 Field.password: text(),
+                Field.protocol: Schemas.choice((Protocol.ssh.value, Protocol.winrm.value), Protocol.ssh.value),
+                Field.ssl: Schemas.flag(False),
+                Field.auth: Schemas.choice(Auth.values, Auth.ntlm),
             }, [Field.ip, Field.port, Field.username, Field.password])),
             cls.item(Tool.update, ToolDesc.update, Schemas.obj({
                 Field.old_ip: text(),
@@ -69,6 +83,9 @@ class ToolCatalog:
                 Field.port: integer(Default.port),
                 Field.username: text(),
                 Field.password: text(),
+                Field.protocol: Schemas.choice((Protocol.ssh.value, Protocol.winrm.value)),
+                Field.ssl: Schemas.flag(False),
+                Field.auth: Schemas.choice(Auth.values),
             }, [Field.old_ip, Field.ip, Field.port, Field.username, Field.password])),
             cls.item(Tool.delete, ToolDesc.delete, Schemas.obj({
                 Field.ip: text(),
@@ -85,6 +102,9 @@ class ToolCatalog:
                 Field.namespace: text(),
                 Field.pod: text(),
                 Field.shell: text(),
+                Field.protocol: Schemas.choice((Protocol.ssh.value, Protocol.winrm.value), Protocol.ssh.value),
+                Field.ssl: Schemas.flag(False),
+                Field.auth: Schemas.choice(Auth.values, Auth.ntlm),
             }, [Field.ip, Field.port, Field.username, Field.password, Field.command])),
             cls.item(Tool.sessions, ToolDesc.sessions, Schemas.obj({Field.ip: text()}, [Field.ip])),
             cls.item(Tool.close, ToolDesc.close, Schemas.obj({
@@ -142,6 +162,53 @@ class ToolCatalog:
             cls.item(Tool.servers, ToolDesc.servers, Schemas.obj({}, [])),
             cls.item(Tool.version, ToolDesc.version, Schemas.obj({}, [])),
             cls.item(Tool.service_start, ToolDesc.service_start, Schemas.obj({}, [])),
+            cls.item(Tool.winrm_register, ToolDesc.winrm_register, Schemas.obj({
+                Field.ip: text(),
+                Field.port: integer(WinrmDefault.port),
+                Field.username: text(),
+                Field.password: text(),
+                Field.ssl: Schemas.flag(False),
+                Field.auth: Schemas.choice(Auth.values, Auth.ntlm),
+            }, [Field.ip, Field.username, Field.password])),
+            cls.item(Tool.winrm_connect, ToolDesc.winrm_connect, Schemas.obj({Field.ip: text()}, [Field.ip])),
+            cls.item(Tool.winrm_send, ToolDesc.winrm_send, Schemas.obj({
+                Field.session_id: text(),
+                Field.input: text(),
+                Field.shell: Schemas.choice(WinrmShell.values, WinrmShell.powershell),
+            }, [Field.session_id, Field.input])),
+            cls.item(Tool.winrm_output, ToolDesc.winrm_output, Schemas.obj({
+                Field.session_id: text(),
+                Field.command_id: text(),
+                Field.cursor: integer(0),
+                Field.limit: integer(Default.read),
+            }, [Field.session_id])),
+            cls.item(Tool.winrm_once, ToolDesc.winrm_once, Schemas.obj({
+                Field.ip: text(),
+                Field.port: integer(WinrmDefault.port),
+                Field.username: text(),
+                Field.password: text(),
+                Field.command: text(),
+                Field.shell: Schemas.choice(WinrmShell.values, WinrmShell.powershell),
+                Field.ssl: Schemas.flag(False),
+                Field.auth: Schemas.choice(Auth.values, Auth.ntlm),
+            }, [Field.ip, Field.username, Field.password, Field.command])),
+            cls.item(Tool.winrm_upload, ToolDesc.winrm_upload, Schemas.obj({
+                Field.ip: text(),
+                Field.local_path: text(),
+                Field.remote_path: text(),
+                Field.session_id: text(),
+            }, [Field.ip, Field.local_path, Field.remote_path])),
+            cls.item(Tool.winrm_download, ToolDesc.winrm_download, Schemas.obj({
+                Field.ip: text(),
+                Field.remote_path: text(),
+                Field.local_path: text(),
+                Field.session_id: text(),
+            }, [Field.ip, Field.remote_path, Field.local_path])),
+            cls.item(Tool.winrm_close, ToolDesc.winrm_close, Schemas.obj({
+                Field.ip: text(),
+                Field.session_id: text(),
+            }, [Field.ip])),
+            cls.item(Tool.winrm_sessions, ToolDesc.winrm_sessions, Schemas.obj({Field.ip: text()}, [Field.ip])),
         ]
 
 
